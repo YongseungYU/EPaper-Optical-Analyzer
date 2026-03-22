@@ -25,7 +25,7 @@ st.set_page_config(
 )
 
 st.title("📄 데이터 업로드")
-st.markdown("I1Pro3 측정 데이터(CGATS txt) 파일을 업로드하여 L\\*a\\*b\\* 값을 추출합니다.")
+st.markdown("I1Pro3 측정 데이터(CGATS txt)를 업로드하거나 붙여넣어 L\\*a\\*b\\* 값을 추출합니다.")
 
 # ---------------------------------------------------------------------------
 # 세션 상태 초기화
@@ -159,20 +159,55 @@ with st.expander("📖 사용 안내", expanded=False):
     st.markdown("""
     **지원 파일 형식**: I1Pro3 CGATS 형식 (.txt)
 
-    **사용 방법**:
-    1. 아래 업로드 영역에 측정 데이터 txt 파일을 드래그 앤 드롭하거나 **Browse files** 버튼을 클릭하세요.
-    2. 여러 파일을 동시에 업로드할 수 있습니다.
-    3. 파싱이 완료되면 데이터 미리보기가 표시됩니다.
-    4. 데이터는 자동으로 저장되어 다른 분석 페이지에서 사용할 수 있습니다.
-
-    **테스트**: 샘플 데이터 버튼을 눌러 데모 데이터로 먼저 테스트해 보세요.
+    **데이터 입력 방법 (택 1)**:
+    1. **파일 업로드**: 아래 업로드 영역에 파일을 드래그 앤 드롭하거나 Browse files 클릭
+    2. **텍스트 붙여넣기**: 사내 보안으로 파일 업로드가 안 될 경우,
+       txt 파일을 메모장으로 열어 전체 복사(Ctrl+A → Ctrl+C) 후 텍스트 입력란에 붙여넣기
+    3. **샘플 데이터**: 테스트용 데모 데이터 로드
     """)
 
-# --- 파일 업로드 / 샘플 데이터 ---
-col_upload, col_sample = st.columns([3, 1])
+# --- 데이터 입력 방식 선택 (탭) ---
+tab_paste, tab_upload, tab_sample = st.tabs([
+    "📋 텍스트 붙여넣기 (권장)",
+    "📁 파일 업로드",
+    "🔬 샘플 데이터",
+])
 
-with col_upload:
+# --- 탭 1: 텍스트 붙여넣기 ---
+with tab_paste:
+    st.subheader("텍스트 붙여넣기")
+    st.markdown(
+        "CGATS txt 파일을 **메모장**으로 열어 "
+        "**전체 선택(Ctrl+A) → 복사(Ctrl+C)** 후 아래에 붙여넣기하세요."
+    )
+
+    pasted_text = st.text_area(
+        "CGATS 데이터 붙여넣기",
+        height=300,
+        placeholder="여기에 CGATS 데이터를 붙여넣으세요...\n\nCGATS.17\nORIGINATOR \"i1Profiler\"\n...",
+        key="cgats_paste_input",
+    )
+
+    if st.button("📋 붙여넣기 데이터 파싱", type="primary", use_container_width=True):
+        if pasted_text and pasted_text.strip():
+            try:
+                paste_df, paste_meta = parse_cgats_string(pasted_text)
+                paste_df['SOURCE_FILE'] = 'pasted_data'
+                st.session_state['measurement_data'] = paste_df
+                st.session_state['file_metadata'] = {'pasted_data': paste_meta}
+                st.session_state['uploaded_file_names'] = ['pasted_data.txt']
+                st.success(f"파싱 성공! ({len(paste_df)}개 샘플)")
+                st.rerun()
+            except Exception as e:
+                st.error(f"파싱 실패: {e}")
+                st.info("CGATS 형식이 올바른지 확인해 주세요. BEGIN_DATA_FORMAT, BEGIN_DATA 등이 포함되어야 합니다.")
+        else:
+            st.warning("데이터를 입력해 주세요.")
+
+# --- 탭 2: 파일 업로드 ---
+with tab_upload:
     st.subheader("파일 업로드")
+    st.caption("사내 보안 정책으로 파일 업로드가 차단될 수 있습니다. 그 경우 '텍스트 붙여넣기' 탭을 이용하세요.")
     uploaded_files = st.file_uploader(
         "CGATS txt 파일을 선택하거나 여기에 드래그하세요",
         type=["txt"],
@@ -180,9 +215,10 @@ with col_upload:
         help="I1Pro3에서 내보낸 CGATS 형식 txt 파일을 업로드합니다.",
     )
 
-with col_sample:
+# --- 탭 3: 샘플 데이터 ---
+with tab_sample:
     st.subheader("샘플 데이터")
-    st.markdown("테스트용 샘플 데이터를 불러옵니다.")
+    st.markdown("테스트용 E-paper 측정 샘플 데이터(12색)를 불러옵니다.")
     if st.button("🔬 샘플 데이터 로드", use_container_width=True):
         try:
             sample_df, sample_meta = generate_sample_data()
