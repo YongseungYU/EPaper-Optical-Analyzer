@@ -9,18 +9,12 @@ from typing import Tuple
 # -- Standard color names mapped to L*a*b* values --
 
 _STANDARD_COLORS: dict[str, Tuple[float, float, float]] = {
-    "White": (100.0, 0.0, 0.0),
-    "Black": (0.0, 0.0, 0.0),
-    "Red": (53.23, 80.11, 67.22),
-    "Green": (87.74, -86.18, 83.18),
-    "Blue": (32.30, 79.20, -107.86),
-    "Yellow": (97.14, -21.56, 94.48),
-    "Cyan": (91.11, -48.09, -14.13),
-    "Magenta": (60.32, 98.25, -60.83),
-    "Orange": (74.93, 23.93, 78.95),
-    "Gray": (53.59, 0.0, 0.0),
-    "Dark Gray": (25.0, 0.0, 0.0),
-    "Light Gray": (75.0, 0.0, 0.0),
+    "White": (66.5, -4.0, 0.0),
+    "Black": (12.0, 7.0, -11.0),
+    "Red": (26.5, 41.0, 30.0),
+    "Yellow": (62.0, -11.0, 65.0),
+    "Blue": (27.0, 6.0, -35.0),
+    "Green": (32.0, -22.0, 5.0),
 }
 
 
@@ -116,6 +110,33 @@ def calculate_gamut_area(colors: list[tuple[float, float]]) -> float:
         area += sorted_colors[i][0] * sorted_colors[j][1]
         area -= sorted_colors[j][0] * sorted_colors[i][1]
     return abs(area) / 2.0
+
+
+def calculate_gamut_volume(colors: list[tuple[float, float, float]]) -> float:
+    """Calculate the gamut volume in L*a*b* space using Convex Hull.
+
+    Parameters
+    ----------
+    colors : list of (L*, a*, b*) tuples
+        Points in L*a*b* space.
+
+    Returns
+    -------
+    float
+        Volume in L*a*b* units cubed.
+    """
+    import numpy as np
+    from scipy.spatial import ConvexHull
+
+    if len(colors) < 4:
+        return 0.0
+
+    try:
+        points = np.array(colors)
+        hull = ConvexHull(points)
+        return hull.volume
+    except Exception:
+        return 0.0
 
 
 def get_color_name(L: float, a: float, b: float) -> str:

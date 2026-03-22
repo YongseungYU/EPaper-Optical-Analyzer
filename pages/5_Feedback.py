@@ -5,6 +5,37 @@ import requests
 
 st.set_page_config(page_title="피드백", page_icon="💬", layout="wide")
 
+# ---------------------------------------------------------------------------
+# 고급 모드 체크
+# ---------------------------------------------------------------------------
+
+if st.session_state.get('app_mode') != 'advanced':
+    st.warning("이 페이지는 고급 모드에서만 사용할 수 있습니다. 홈에서 고급 모드를 선택해 주세요.")
+    st.stop()
+
+# ---------------------------------------------------------------------------
+# 비밀번호 보호
+# ---------------------------------------------------------------------------
+
+if 'feedback_authenticated' not in st.session_state:
+    st.session_state['feedback_authenticated'] = False
+
+if not st.session_state['feedback_authenticated']:
+    st.title("💬 피드백")
+    st.markdown("피드백 페이지에 접근하려면 비밀번호를 입력하세요.")
+    password = st.text_input("비밀번호", type="password", key="feedback_pw")
+    if st.button("확인"):
+        if password == "tjsgod123!":
+            st.session_state['feedback_authenticated'] = True
+            st.rerun()
+        else:
+            st.error("비밀번호가 틀렸습니다.")
+    st.stop()
+
+# ---------------------------------------------------------------------------
+# 피드백 폼
+# ---------------------------------------------------------------------------
+
 st.title("💬 피드백")
 st.markdown("앱 사용 중 개선사항이나 오류를 알려주세요. 개발팀에 자동 전달됩니다.")
 
