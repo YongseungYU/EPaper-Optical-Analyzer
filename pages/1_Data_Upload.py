@@ -1,0 +1,342 @@
+"""데이터 업로드 페이지
+
+I1Pro3 CGATS 형식 txt 파일을 업로드하고 파싱 결과를 확인합니다.
+"""
+
+import streamlit as st
+import pandas as pd
+import sys
+import os
+
+# 프로젝트 루트를 sys.path에 추가
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+from core.parser import parse_cgats_file, parse_cgats_string
+from core.color_utils import lab_to_hex
+from core.export import export_to_excel
+
+# ---------------------------------------------------------------------------
+# 페이지 설정
+# ---------------------------------------------------------------------------
+st.set_page_config(
+    page_title="데이터 업로드 - E-paper Optical Analyzer",
+    page_icon="📄",
+    layout="wide",
+)
+
+st.title("📄 데이터 업로드")
+st.markdown("I1Pro3 측정 데이터(CGATS txt) 파일을 업로드하여 L\\*a\\*b\\* 값을 추출합니다.")
+
+# ---------------------------------------------------------------------------
+# 세션 상태 초기화
+# ---------------------------------------------------------------------------
+if 'measurement_data' not in st.session_state:
+    st.session_state['measurement_data'] = None
+if 'file_metadata' not in st.session_state:
+    st.session_state['file_metadata'] = {}
+if 'uploaded_file_names' not in st.session_state:
+    st.session_state['uploaded_file_names'] = []
+
+
+# ---------------------------------------------------------------------------
+# 샘플 데이터 생성 함수
+# ---------------------------------------------------------------------------
+def generate_sample_data() -> tuple[pd.DataFrame, dict]:
+    """E-paper 측정 샘플 데이터를 생성합니다."""
+    sample_cgats = """CGATS.17
+ORIGINATOR "i1Profiler"
+DESCRIPTOR "E-paper Sample Measurement Data"
+NUMBER_OF_FIELDS 5
+BEGIN_DATA_FORMAT
+SAMPLE_ID SAMPLE_NAME LAB_L LAB_A LAB_B
+END_DATA_FORMAT
+NUMBER_OF_SETS 12
+BEGIN_DATA
+1   "White"         92.15   -0.82    3.14
+2   "Black"          4.87    0.31   -0.72
+3   "Red"           42.53   58.67   30.25
+4   "Green"         51.28  -45.12   22.87
+5   "Blue"          28.76   14.53  -50.34
+6   "Yellow"        84.92   -5.14   78.65
+7   "Cyan"          62.41  -28.93  -22.15
+8   "Magenta"       48.15   62.34  -12.47
+9   "Light Gray"    76.32   -0.45    1.28
+10  "Dark Gray"     35.18    0.67   -0.93
+11  "Orange"        62.87   42.15   58.92
+12  "Purple"        32.45   38.72  -42.18
+END_DATA"""
+    return parse_cgats_string(sample_cgats)
+
+
+# ---------------------------------------------------------------------------
+# 색상 미리보기가 포함된 테이블 생성
+# ---------------------------------------------------------------------------
+def build_display_html(df: pd.DataFrame) -> str:
+    """L*a*b* 데이터에 색상 패치를 추가한 HTML 테이블을 생성합니다."""
+    # L*, a*, b* 컬럼 이름 탐색
+    lab_l_col = next((c for c in df.columns if c.upper() in ('LAB_L', 'L*', 'L')), None)
+    lab_a_col = next((c for c in df.columns if c.upper() in ('LAB_A', 'A*', 'A')), None)
+    lab_b_col = next((c for c in df.columns if c.upper() in ('LAB_B', 'B*', 'B')), None)
+
+    if not all([lab_l_col, lab_a_col, lab_b_col]):
+        return None
+
+    # HTML 테이블 구성
+    html = """
+    <style>
+    .color-table {
+        border-collapse: collapse;
+        width: 100%;
+        font-size: 14px;
+        font-family: 'Segoe UI', sans-serif;
+    }
+    .color-table th {
+        background-color: #1f2937;
+        color: white;
+        padding: 10px 14px;
+        text-align: left;
+        border-bottom: 2px solid #374151;
+    }
+    .color-table th.lab-col {
+        background-color: #1e40af;
+    }
+    .color-table td {
+        padding: 8px 14px;
+        border-bottom: 1px solid #e5e7eb;
+    }
+    .color-table tr:hover {
+        background-color: #f3f4f6;
+    }
+    .color-patch {
+        display: inline-block;
+        width: 28px;
+        height: 28px;
+        border-radius: 4px;
+        border: 1px solid #d1d5db;
+        vertical-align: middle;
+    }
+    </style>
+    <table class="color-table">
+    <thead><tr>
+        <th>색상 미리보기</th>
+    """
+    for col in df.columns:
+        cls = ' class="lab-col"' if col in (lab_l_col, lab_a_col, lab_b_col) else ''
+        html += f"<th{cls}>{col}</th>"
+    html += "</tr></thead><tbody>"
+
+    for _, row in df.iterrows():
+        try:
+            L = float(row[lab_l_col])
+            a = float(row[lab_a_col])
+            b = float(row[lab_b_col])
+            hex_color = lab_to_hex(L, a, b)
+        except (ValueError, TypeError):
+            hex_color = '#cccccc'
+
+        html += f'<tr><td><span class="color-patch" style="background-color:{hex_color};" title="{hex_color}"></span></td>'
+        for col in df.columns:
+            val = row[col]
+            if col in (lab_l_col, lab_a_col, lab_b_col):
+                try:
+                    html += f'<td style="font-weight:600;color:#1e40af;">{float(val):.2f}</td>'
+                except (ValueError, TypeError):
+                    html += f'<td>{val}</td>'
+            else:
+                html += f'<td>{val}</td>'
+        html += '</tr>'
+
+    html += "</tbody></table>"
+    return html
+
+
+# ---------------------------------------------------------------------------
+# 메인 레이아웃
+# ---------------------------------------------------------------------------
+
+# --- 안내 ---
+with st.expander("📖 사용 안내", expanded=False):
+    st.markdown("""
+    **지원 파일 형식**: I1Pro3 CGATS 형식 (.txt)
+
+    **사용 방법**:
+    1. 아래 업로드 영역에 측정 데이터 txt 파일을 드래그 앤 드롭하거나 **Browse files** 버튼을 클릭하세요.
+    2. 여러 파일을 동시에 업로드할 수 있습니다.
+    3. 파싱이 완료되면 데이터 미리보기가 표시됩니다.
+    4. 데이터는 자동으로 저장되어 다른 분석 페이지에서 사용할 수 있습니다.
+
+    **테스트**: 샘플 데이터 버튼을 눌러 데모 데이터로 먼저 테스트해 보세요.
+    """)
+
+# --- 파일 업로드 / 샘플 데이터 ---
+col_upload, col_sample = st.columns([3, 1])
+
+with col_upload:
+    st.subheader("파일 업로드")
+    uploaded_files = st.file_uploader(
+        "CGATS txt 파일을 선택하거나 여기에 드래그하세요",
+        type=["txt"],
+        accept_multiple_files=True,
+        help="I1Pro3에서 내보낸 CGATS 형식 txt 파일을 업로드합니다.",
+    )
+
+with col_sample:
+    st.subheader("샘플 데이터")
+    st.markdown("테스트용 샘플 데이터를 불러옵니다.")
+    if st.button("🔬 샘플 데이터 로드", use_container_width=True):
+        try:
+            sample_df, sample_meta = generate_sample_data()
+            st.session_state['measurement_data'] = sample_df
+            st.session_state['file_metadata'] = {
+                'sample_data': sample_meta
+            }
+            st.session_state['uploaded_file_names'] = ['sample_data.txt']
+            st.success("샘플 데이터가 로드되었습니다! (12개 샘플)")
+            st.rerun()
+        except Exception as e:
+            st.error(f"샘플 데이터 로드 실패: {e}")
+
+st.divider()
+
+# ---------------------------------------------------------------------------
+# 파일 파싱 처리
+# ---------------------------------------------------------------------------
+if uploaded_files:
+    st.subheader("파싱 결과")
+
+    all_dfs = []
+    all_metadata = {}
+    file_names = []
+    parse_errors = []
+
+    progress_bar = st.progress(0, text="파일 파싱 중...")
+
+    for i, uploaded_file in enumerate(uploaded_files):
+        progress_bar.progress(
+            (i + 1) / len(uploaded_files),
+            text=f"파싱 중: {uploaded_file.name} ({i + 1}/{len(uploaded_files)})"
+        )
+        try:
+            df, meta = parse_cgats_file(uploaded_file)
+            # 파일명 컬럼 추가 (여러 파일 구분용)
+            df['SOURCE_FILE'] = uploaded_file.name
+            all_dfs.append(df)
+            all_metadata[uploaded_file.name] = meta
+            file_names.append(uploaded_file.name)
+        except Exception as e:
+            parse_errors.append((uploaded_file.name, str(e)))
+
+    progress_bar.empty()
+
+    # 파싱 상태 표시
+    col_success, col_error = st.columns(2)
+    with col_success:
+        if all_dfs:
+            st.success(f"{len(all_dfs)}개 파일 파싱 성공")
+    with col_error:
+        if parse_errors:
+            st.error(f"{len(parse_errors)}개 파일 파싱 실패")
+            for fname, err in parse_errors:
+                st.warning(f"**{fname}**: {err}")
+
+    # 데이터 병합 및 저장
+    if all_dfs:
+        combined_df = pd.concat(all_dfs, ignore_index=True)
+        st.session_state['measurement_data'] = combined_df
+        st.session_state['file_metadata'] = all_metadata
+        st.session_state['uploaded_file_names'] = file_names
+
+# ---------------------------------------------------------------------------
+# 데이터 미리보기 표시
+# ---------------------------------------------------------------------------
+if st.session_state['measurement_data'] is not None:
+    df = st.session_state['measurement_data']
+    metadata = st.session_state['file_metadata']
+
+    st.subheader("데이터 미리보기")
+
+    # --- 파일 정보 요약 ---
+    info_col1, info_col2, info_col3 = st.columns(3)
+    with info_col1:
+        st.metric("총 샘플 수", f"{len(df)}개")
+    with info_col2:
+        st.metric("업로드 파일 수", f"{len(st.session_state['uploaded_file_names'])}개")
+    with info_col3:
+        st.metric("데이터 컬럼 수", f"{len(df.columns)}개")
+
+    # 파일별 메타데이터 표시
+    if metadata:
+        with st.expander("파일 메타데이터 상세", expanded=False):
+            for fname, meta in metadata.items():
+                st.markdown(f"**{fname}**")
+                meta_items = {k: v for k, v in meta.items() if k != 'COLUMNS'}
+                st.json(meta_items)
+
+    # --- 색상 패치가 포함된 HTML 테이블 ---
+    st.markdown("#### 측정 데이터 (색상 미리보기 포함)")
+    html_table = build_display_html(df)
+    if html_table:
+        st.markdown(html_table, unsafe_allow_html=True)
+    else:
+        st.info("L*a*b* 컬럼을 찾을 수 없어 색상 미리보기를 표시할 수 없습니다.")
+
+    # --- 인터랙티브 데이터 테이블 ---
+    st.markdown("#### 인터랙티브 데이터 테이블")
+
+    # L*a*b* 컬럼 하이라이트를 위한 스타일 함수
+    lab_cols = [c for c in df.columns if c.upper() in ('LAB_L', 'LAB_A', 'LAB_B', 'L*', 'A*', 'B*')]
+
+    def highlight_lab(col):
+        if col.name in lab_cols:
+            return ['background-color: #dbeafe; font-weight: bold'] * len(col)
+        return [''] * len(col)
+
+    styled_df = df.style.apply(highlight_lab)
+    st.dataframe(styled_df, use_container_width=True, height=400)
+
+    st.divider()
+
+    # --- Excel 다운로드 ---
+    st.subheader("데이터 내보내기")
+
+    dl_col1, dl_col2 = st.columns([1, 3])
+    with dl_col1:
+        try:
+            excel_bytes = export_to_excel(df)
+            st.download_button(
+                label="📥 Excel 다운로드",
+                data=excel_bytes,
+                file_name="epaper_measurement_data.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+        except Exception as e:
+            st.error(f"Excel 파일 생성 실패: {e}")
+            st.info("openpyxl 패키지가 설치되어 있는지 확인하세요: `pip install openpyxl`")
+
+    with dl_col2:
+        st.caption("파싱된 측정 데이터를 Excel 파일로 다운로드합니다. 다른 분석 페이지에서도 이 데이터를 사용할 수 있습니다.")
+
+else:
+    # 데이터가 없을 때 안내 메시지
+    st.info("위에서 파일을 업로드하거나 샘플 데이터를 로드하세요.")
+
+    st.markdown("""
+    ---
+    **CGATS 파일 형식 예시:**
+    ```
+    CGATS.17
+    ORIGINATOR "i1Profiler"
+    DESCRIPTOR "i1Pro3 measurement data"
+    NUMBER_OF_FIELDS 5
+    BEGIN_DATA_FORMAT
+    SAMPLE_ID SAMPLE_NAME LAB_L LAB_A LAB_B
+    END_DATA_FORMAT
+    NUMBER_OF_SETS 3
+    BEGIN_DATA
+    1   "White"    95.2   -0.8    2.1
+    2   "Black"     5.3    0.2   -0.5
+    3   "Red"      45.1   67.2   35.8
+    END_DATA
+    ```
+    """)
