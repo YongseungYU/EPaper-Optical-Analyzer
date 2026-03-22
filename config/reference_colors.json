@@ -27,5 +27,28 @@
         "colors": {
             "White": {"L": 100.0, "a": 0.0, "b": 0.0}
         }
+    },
+    "32RS1Q": {
+        "description": "32RS1Q E-paper Display 기준값 (CIEDE2000)",
+        "colors": {
+            "White": {"L": 66.5, "a": -4, "b": 0},
+            "Black": {"L": 12, "a": 7, "b": -11},
+            "Red": {"L": 26.5, "a": 41, "b": 30},
+            "Yellow": {"L": 62, "a": -11, "b": 65},
+            "Blue": {"L": 27, "a": 6, "b": -35},
+            "Green": {"L": 32, "a": -22, "b": 5}
+        },
+        "delta_e_limits": {
+            "White": 6,
+            "Black": 6,
+            "Red": 6,
+            "Yellow": 6,
+            "Blue": 6,
+            "Green": 8
+        },
+        "optical_spec": {
+            "reflectance": {"min": 30, "typ": 34, "unit": "%", "condition": "White"},
+            "contrast_ratio": {"min": 15, "typ": 22}
+        }
     }
 }

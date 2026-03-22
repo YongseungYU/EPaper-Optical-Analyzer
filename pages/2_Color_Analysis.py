@@ -12,7 +12,7 @@ _PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-from core.color_utils import lab_to_hex, get_color_name, calculate_chroma, calculate_hue
+from core.color_utils import lab_to_hex, get_color_name
 
 # ── 페이지 설정 ─────────────────────────────────────────────────────────────
 
@@ -20,13 +20,29 @@ st.set_page_config(page_title="색상 분석", page_icon="🎨", layout="wide")
 st.title("🎨 색상 분석")
 st.markdown("측정된 L\\*a\\*b\\* 데이터를 기반으로 색상을 시각화하고 분석합니다.")
 
+# ── 데이터 소스 선택 (현재 / 누적) ──────────────────────────────────────────
+
+data_source = "현재 데이터"
+has_cumulative = st.session_state.get("cumulative_data") is not None
+
+if has_cumulative:
+    data_source = st.selectbox(
+        "분석 데이터 선택",
+        options=["현재 데이터", "누적 데이터"],
+        index=0,
+        help="누적 데이터를 선택하면 이전에 업로드한 데이터를 합산하여 분석합니다.",
+    )
+
 # ── 데이터 확인 ─────────────────────────────────────────────────────────────
 
-if "measurement_data" not in st.session_state or st.session_state["measurement_data"] is None:
-    st.warning("⚠️ 측정 데이터가 없습니다. 먼저 **Data Upload** 페이지에서 데이터를 업로드해 주세요.")
-    st.stop()
-
-df: pd.DataFrame = st.session_state["measurement_data"]
+if data_source == "누적 데이터":
+    df: pd.DataFrame = st.session_state["cumulative_data"]
+    st.info("📂 누적 데이터를 사용하여 분석합니다.")
+else:
+    if "measurement_data" not in st.session_state or st.session_state["measurement_data"] is None:
+        st.warning("⚠️ 측정 데이터가 없습니다. 먼저 **Data Upload** 페이지에서 데이터를 업로드해 주세요.")
+        st.stop()
+    df = st.session_state["measurement_data"]
 
 # Validate required columns
 required_cols = ["LAB_L", "LAB_A", "LAB_B"]
@@ -47,13 +63,10 @@ for idx, row in df.iterrows():
     L, a, b = float(row["LAB_L"]), float(row["LAB_A"]), float(row["LAB_B"])
     sample_name = str(row[name_col]) if name_col else f"Sample {idx + 1}"
     hex_color = lab_to_hex(L, a, b)
-    chroma = calculate_chroma(a, b)
-    hue = calculate_hue(a, b)
     nearest_color = get_color_name(L, a, b)
     color_data.append({
         "name": sample_name,
         "L": L, "a": a, "b": b,
-        "C": chroma, "h": hue,
         "hex": hex_color,
         "nearest": nearest_color,
     })
@@ -94,14 +107,12 @@ for i in range(0, len(color_data), cols_per_row):
                     unsafe_allow_html=True,
                 )
 
-                # Color details
+                # Color details (L*, a*, b* only — no C* or h°)
                 st.markdown(f"**식별 색상:** {cd['nearest']}")
                 st.markdown(
                     f"- **L\\*** = {cd['L']:.2f}  \n"
                     f"- **a\\*** = {cd['a']:.2f}  \n"
-                    f"- **b\\*** = {cd['b']:.2f}  \n"
-                    f"- **C\\*** (채도) = {cd['C']:.2f}  \n"
-                    f"- **h°** (색상각) = {cd['h']:.1f}°"
+                    f"- **b\\*** = {cd['b']:.2f}"
                 )
                 st.markdown(f"HEX: `{cd['hex']}`")
                 st.divider()
@@ -131,9 +142,7 @@ for cd in color_data:
             f"<b>{cd['name']}</b><br>"
             f"a* = {cd['a']:.2f}<br>"
             f"b* = {cd['b']:.2f}<br>"
-            f"L* = {cd['L']:.2f}<br>"
-            f"C* = {cd['C']:.2f}<br>"
-            f"h° = {cd['h']:.1f}°"
+            f"L* = {cd['L']:.2f}"
             "<extra></extra>"
         ),
     ))
@@ -226,8 +235,6 @@ summary_df = pd.DataFrame([
         "L*": round(cd["L"], 2),
         "a*": round(cd["a"], 2),
         "b*": round(cd["b"], 2),
-        "C* (채도)": round(cd["C"], 2),
-        "h° (색상각)": round(cd["h"], 1),
         "식별 색상": cd["nearest"],
         "HEX": cd["hex"],
     }

@@ -2,11 +2,9 @@
 그래프 및 시각화 페이지.
 
 측정 데이터를 다양한 Plotly 차트로 시각화합니다.
-- L*a*b* 3D 산점도
 - a*b* 색도 다이어그램
-- Delta E 막대 차트
-- 분광 반사율 그래프
 - L* 비교 차트
+- Color Gamut 분석
 """
 
 import streamlit as st
@@ -14,15 +12,7 @@ import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
 
-from core.color_utils import lab_to_hex
-
-# Delta E 모듈이 아직 없을 수 있으므로 안전하게 임포트
-try:
-    from core.delta_e import batch_delta_e
-except ImportError:
-    batch_delta_e = None
-
-from core.parser import get_spectral, spectral_wavelengths
+from core.color_utils import lab_to_hex, calculate_gamut_area
 
 # ---------------------------------------------------------------------------
 # 페이지 설정
@@ -61,11 +51,39 @@ st.title("그래프 및 시각화")
 st.markdown("측정 데이터를 인터랙티브 차트로 시각화합니다.")
 st.divider()
 
-if "measurement_data" not in st.session_state or st.session_state["measurement_data"] is None:
-    st.warning("측정 데이터가 없습니다. 먼저 데이터를 업로드해 주세요.")
-    st.stop()
+# ---------------------------------------------------------------------------
+# 데이터 소스 선택 (현재 데이터 vs 누적 데이터)
+# ---------------------------------------------------------------------------
 
-df: pd.DataFrame = st.session_state["measurement_data"]
+data_source = st.selectbox(
+    "데이터 소스 선택",
+    ["현재 데이터", "누적 데이터"],
+    index=0,
+)
+
+if data_source == "누적 데이터":
+    cumulative = st.session_state.get("cumulative_data")
+    if cumulative is None or (isinstance(cumulative, pd.DataFrame) and cumulative.empty):
+        st.warning("누적 데이터가 없습니다. 현재 데이터를 사용합니다.")
+        data_source = "현재 데이터"
+    elif isinstance(cumulative, list) and len(cumulative) == 0:
+        st.warning("누적 데이터가 없습니다. 현재 데이터를 사용합니다.")
+        data_source = "현재 데이터"
+
+if data_source == "현재 데이터":
+    if "measurement_data" not in st.session_state or st.session_state["measurement_data"] is None:
+        st.warning("측정 데이터가 없습니다. 먼저 데이터를 업로드해 주세요.")
+        st.stop()
+    df: pd.DataFrame = st.session_state["measurement_data"]
+else:
+    cumulative = st.session_state.get("cumulative_data")
+    if isinstance(cumulative, pd.DataFrame):
+        df = cumulative
+    elif isinstance(cumulative, list):
+        df = pd.concat(cumulative, ignore_index=True)
+    else:
+        st.error("누적 데이터 형식을 인식할 수 없습니다.")
+        st.stop()
 
 # L*a*b* 컬럼 존재 확인
 _REQUIRED_COLS = ["LAB_L", "LAB_A", "LAB_B"]
@@ -86,61 +104,10 @@ hex_colors = [
 ]
 
 # =========================================================================
-# 1. L*a*b* 3D 산점도
+# 1. a*b* 색도 다이어그램
 # =========================================================================
 
-st.header("1. L*a*b* 3D 산점도")
-st.caption("a*를 X축, b*를 Y축, L*를 Z축으로 배치한 3D 색 공간 시각화입니다.")
-
-fig_3d = go.Figure(
-    data=[
-        go.Scatter3d(
-            x=df["LAB_A"],
-            y=df["LAB_B"],
-            z=df["LAB_L"],
-            mode="markers+text",
-            marker=dict(
-                size=10,
-                color=hex_colors,
-                line=dict(width=1, color="gray"),
-                opacity=0.95,
-            ),
-            text=sample_names,
-            textposition="top center",
-            textfont=dict(size=10),
-            hovertemplate=(
-                "<b>%{text}</b><br>"
-                "a* = %{x:.2f}<br>"
-                "b* = %{y:.2f}<br>"
-                "L* = %{z:.2f}<extra></extra>"
-            ),
-        )
-    ]
-)
-
-fig_3d.update_layout(
-    **_common_layout(
-        title="L*a*b* 3D 색 공간",
-        scene=dict(
-            xaxis_title="a* (녹-적)",
-            yaxis_title="b* (청-황)",
-            zaxis_title="L* (명도)",
-            xaxis=dict(backgroundcolor="rgb(240,240,240)"),
-            yaxis=dict(backgroundcolor="rgb(240,240,240)"),
-            zaxis=dict(backgroundcolor="rgb(245,245,245)"),
-        ),
-        height=650,
-    )
-)
-
-st.plotly_chart(fig_3d, use_container_width=True)
-st.divider()
-
-# =========================================================================
-# 2. a*b* 색도 다이어그램
-# =========================================================================
-
-st.header("2. a*b* 색도 다이어그램")
+st.header("1. a*b* 색도 다이어그램")
 st.caption("a*-b* 평면 위에 측정 색상을 표시합니다. 기준 색상은 다이아몬드(◆)로 표시됩니다.")
 
 fig_ab = go.Figure()
@@ -255,159 +222,11 @@ st.plotly_chart(fig_ab, use_container_width=True)
 st.divider()
 
 # =========================================================================
-# 3. Delta E 막대 차트
+# 2. L* 비교 차트
 # =========================================================================
 
-st.header("3. Delta E 막대 차트")
-
-delta_e_results = st.session_state.get("delta_e_results")
-
-if delta_e_results is not None and isinstance(delta_e_results, (list, pd.DataFrame)):
-    # DataFrame으로 변환
-    if isinstance(delta_e_results, list):
-        de_df = pd.DataFrame(delta_e_results)
-    else:
-        de_df = delta_e_results.copy()
-
-    # 필요한 컬럼 확인
-    de_col = None
-    for candidate in ["Delta E", "delta_e", "Delta_E", "DELTA_E", "dE"]:
-        if candidate in de_df.columns:
-            de_col = candidate
-            break
-
-    name_col = None
-    for candidate in ["샘플명", "SAMPLE_NAME", "sample_name", "name", "Name"]:
-        if candidate in de_df.columns:
-            name_col = candidate
-            break
-
-    if de_col is not None:
-        threshold = st.session_state.get("delta_e_threshold", 3.0)
-        de_values = de_df[de_col].astype(float)
-        de_names = (
-            de_df[name_col].astype(str).tolist()
-            if name_col
-            else [f"샘플 {i + 1}" for i in range(len(de_df))]
-        )
-
-        bar_colors = [
-            "rgb(46, 160, 67)" if v <= threshold else "rgb(218, 54, 51)"
-            for v in de_values
-        ]
-
-        fig_de = go.Figure(
-            data=[
-                go.Bar(
-                    y=de_names,
-                    x=de_values,
-                    orientation="h",
-                    marker_color=bar_colors,
-                    text=[f"{v:.2f}" for v in de_values],
-                    textposition="outside",
-                    hovertemplate=(
-                        "<b>%{y}</b><br>"
-                        "Delta E = %{x:.2f}<extra></extra>"
-                    ),
-                )
-            ]
-        )
-
-        # 임계값 선
-        fig_de.add_vline(
-            x=threshold,
-            line_dash="dash",
-            line_color="orange",
-            line_width=2,
-            annotation_text=f"임계값 ({threshold})",
-            annotation_position="top right",
-            annotation_font=dict(size=11, color="orange"),
-        )
-
-        fig_de.update_layout(
-            **_common_layout(
-                title="Delta E 분석 결과",
-                xaxis_title="Delta E",
-                yaxis_title="샘플",
-                height=max(350, len(de_names) * 45 + 100),
-                yaxis=dict(autorange="reversed"),
-            )
-        )
-
-        # 범례 설명
-        st.markdown(
-            f"🟢 **Pass** (Delta E ≤ {threshold})  &nbsp;&nbsp; "
-            f"🔴 **Fail** (Delta E > {threshold})"
-        )
-        st.plotly_chart(fig_de, use_container_width=True)
-    else:
-        st.info("Delta E 결과 데이터에 Delta E 값 컬럼을 찾을 수 없습니다.")
-else:
-    st.info("Delta E 분석 결과가 없습니다. 분석 페이지에서 먼저 Delta E를 계산해 주세요.")
-
-st.divider()
-
-# =========================================================================
-# 4. 분광 반사율 그래프
-# =========================================================================
-
-st.header("4. 분광 반사율 그래프")
-
-spec_df = get_spectral(df)
-wavelengths = spectral_wavelengths(df)
-
-if spec_df is not None and wavelengths:
-    fig_spec = go.Figure()
-
-    spec_cols = sorted(
-        [c for c in spec_df.columns if c.upper().startswith(("SPECTRAL_", "SPEC_", "NM"))],
-        key=lambda c: int(''.join(filter(str.isdigit, c)) or '0'),
-    )
-
-    for idx in range(len(spec_df)):
-        row = spec_df.iloc[idx]
-        reflectance = [float(row[c]) for c in spec_cols]
-        name = sample_names[idx] if idx < len(sample_names) else f"샘플 {idx + 1}"
-
-        fig_spec.add_trace(
-            go.Scatter(
-                x=wavelengths,
-                y=reflectance,
-                mode="lines",
-                name=name,
-                line=dict(width=2),
-                hovertemplate=(
-                    f"<b>{name}</b><br>"
-                    "파장 = %{x} nm<br>"
-                    "반사율 = %{y:.4f}<extra></extra>"
-                ),
-            )
-        )
-
-    fig_spec.update_layout(
-        **_common_layout(
-            title="분광 반사율 곡선",
-            xaxis_title="파장 (nm)",
-            yaxis_title="반사율",
-            xaxis=dict(range=[380, 730], dtick=50),
-            height=500,
-            showlegend=True,
-            legend=dict(x=1.02, y=1, xanchor="left"),
-        )
-    )
-
-    st.plotly_chart(fig_spec, use_container_width=True)
-else:
-    st.info("분광 반사율 데이터가 포함되어 있지 않습니다. 스펙트럼 데이터가 있는 파일을 업로드하면 이 그래프가 표시됩니다.")
-
-st.divider()
-
-# =========================================================================
-# 5. L* 비교 차트
-# =========================================================================
-
-st.header("5. L* 비교 차트")
-st.caption("각 샘플의 명도(L*) 값을 비교합니다. 기준 L* 값이 있으면 수평선으로 표시됩니다.")
+st.header("2. L* 비교 차트")
+st.caption("각 샘플의 명도(L*) 값을 비교합니다.")
 
 fig_lstar = go.Figure()
 
@@ -432,31 +251,6 @@ fig_lstar.add_trace(
     )
 )
 
-# 기준 색상의 L* 값을 수평선으로 표시
-if ref_colors and isinstance(ref_colors, dict):
-    # 고유한 색상 사용
-    _line_colors = [
-        "red", "blue", "green", "purple", "orange", "brown", "teal",
-        "magenta", "olive", "navy",
-    ]
-    for i, (name, vals) in enumerate(ref_colors.items()):
-        ref_L = None
-        if isinstance(vals, (list, tuple)) and len(vals) == 3:
-            ref_L = vals[0]
-        elif isinstance(vals, dict) and "L" in vals:
-            ref_L = vals["L"]
-        if ref_L is not None:
-            line_col = _line_colors[i % len(_line_colors)]
-            fig_lstar.add_hline(
-                y=ref_L,
-                line_dash="dot",
-                line_color=line_col,
-                line_width=1.5,
-                annotation_text=f"기준 {name} (L*={ref_L:.1f})",
-                annotation_position="top right",
-                annotation_font=dict(size=9, color=line_col),
-            )
-
 fig_lstar.update_layout(
     **_common_layout(
         title="L* 명도 비교",
@@ -469,3 +263,146 @@ fig_lstar.update_layout(
 )
 
 st.plotly_chart(fig_lstar, use_container_width=True)
+st.divider()
+
+# =========================================================================
+# 3. Color Gamut 분석
+# =========================================================================
+
+st.header("3. Color Gamut 분석")
+st.caption("6색의 a*b* 좌표로 구성된 색역(Gamut) 면적을 계산합니다.")
+
+# Chromatic color 판별: White/Black (a*~0, b*~0, L* 극단) 제외
+import math
+
+_ACHROMATIC_THRESHOLD = 10.0  # chroma < threshold → achromatic
+
+
+def _is_chromatic(L: float, a: float, b: float) -> bool:
+    """Return True if the color is chromatic (not near the neutral axis)."""
+    chroma = math.sqrt(a ** 2 + b ** 2)
+    return chroma >= _ACHROMATIC_THRESHOLD
+
+
+chromatic_indices = [
+    i for i in range(len(df))
+    if _is_chromatic(df.iloc[i]["LAB_L"], df.iloc[i]["LAB_A"], df.iloc[i]["LAB_B"])
+]
+chromatic_names = [sample_names[i] for i in chromatic_indices]
+
+# 사용자가 gamut에 사용할 색상 선택
+if chromatic_names:
+    selected_gamut_colors = st.multiselect(
+        "Gamut 계산에 사용할 색상 선택",
+        options=chromatic_names,
+        default=chromatic_names,
+        help="White, Black 등 무채색은 자동 제외됩니다. 최소 3개 이상 선택해야 합니다.",
+    )
+else:
+    # fallback: let user pick from all
+    selected_gamut_colors = st.multiselect(
+        "Gamut 계산에 사용할 색상 선택",
+        options=sample_names,
+        default=sample_names,
+        help="최소 3개 이상 선택해야 합니다.",
+    )
+
+# 선택된 색상의 a*b* 좌표 추출
+gamut_ab_points: list[tuple[float, float]] = []
+gamut_labels: list[str] = []
+gamut_hex: list[str] = []
+
+for i, name in enumerate(sample_names):
+    if name in selected_gamut_colors:
+        a_val = float(df.iloc[i]["LAB_A"])
+        b_val = float(df.iloc[i]["LAB_B"])
+        gamut_ab_points.append((a_val, b_val))
+        gamut_labels.append(name)
+        gamut_hex.append(hex_colors[i])
+
+if len(gamut_ab_points) >= 3:
+    # Calculate gamut area
+    gamut_area = calculate_gamut_area(gamut_ab_points)
+
+    # Display metric
+    st.metric("Gamut 면적 (a*b* 단위²)", f"{gamut_area:,.1f}")
+
+    # Sort points by hue angle for polygon drawing
+    sorted_indices = sorted(
+        range(len(gamut_ab_points)),
+        key=lambda idx: math.atan2(gamut_ab_points[idx][1], gamut_ab_points[idx][0]),
+    )
+    sorted_ab = [gamut_ab_points[idx] for idx in sorted_indices]
+    sorted_labels = [gamut_labels[idx] for idx in sorted_indices]
+    sorted_hex = [gamut_hex[idx] for idx in sorted_indices]
+
+    # Close the polygon
+    poly_a = [p[0] for p in sorted_ab] + [sorted_ab[0][0]]
+    poly_b = [p[1] for p in sorted_ab] + [sorted_ab[0][1]]
+
+    fig_gamut = go.Figure()
+
+    # 기준선
+    fig_gamut.add_hline(y=0, line_dash="dash", line_color="gray", line_width=0.8)
+    fig_gamut.add_vline(x=0, line_dash="dash", line_color="gray", line_width=0.8)
+
+    # Filled gamut polygon
+    fig_gamut.add_trace(
+        go.Scatter(
+            x=poly_a,
+            y=poly_b,
+            mode="lines",
+            fill="toself",
+            fillcolor="rgba(100, 149, 237, 0.2)",
+            line=dict(color="rgba(65, 105, 225, 0.7)", width=2),
+            name="Gamut 영역",
+            hoverinfo="skip",
+        )
+    )
+
+    # Color points on the gamut
+    fig_gamut.add_trace(
+        go.Scatter(
+            x=[p[0] for p in sorted_ab],
+            y=[p[1] for p in sorted_ab],
+            mode="markers+text",
+            marker=dict(
+                size=14,
+                color=sorted_hex,
+                line=dict(width=1.5, color="black"),
+                symbol="circle",
+            ),
+            text=sorted_labels,
+            textposition="top right",
+            textfont=dict(size=10),
+            name="색상 포인트",
+            hovertemplate=(
+                "<b>%{text}</b><br>"
+                "a* = %{x:.2f}<br>"
+                "b* = %{y:.2f}<extra></extra>"
+            ),
+        )
+    )
+
+    # Axis range
+    all_a = [p[0] for p in gamut_ab_points]
+    all_b = [p[1] for p in gamut_ab_points]
+    ga_range = [min(all_a) - 15, max(all_a) + 15]
+    gb_range = [min(all_b) - 15, max(all_b) + 15]
+
+    fig_gamut.update_layout(
+        **_common_layout(
+            title=f"Color Gamut (면적: {gamut_area:,.1f})",
+            xaxis_title="a*",
+            yaxis_title="b*",
+            xaxis=dict(zeroline=False, range=ga_range),
+            yaxis=dict(zeroline=False, range=gb_range, scaleanchor="x"),
+            height=600,
+            showlegend=True,
+            legend=dict(x=0.01, y=0.99),
+        )
+    )
+
+    st.plotly_chart(fig_gamut, use_container_width=True)
+else:
+    st.warning("Gamut 계산에는 최소 3개 이상의 색상이 필요합니다. 색상을 더 선택해 주세요.")

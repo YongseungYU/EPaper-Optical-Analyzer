@@ -89,6 +89,35 @@ def calculate_hue(a: float, b: float) -> float:
     return h
 
 
+def calculate_gamut_area(colors: list[tuple[float, float]]) -> float:
+    """Calculate the gamut area in a*b* plane using the Shoelace formula.
+
+    Parameters
+    ----------
+    colors : list of (a*, b*) tuples
+        Points in a*b* plane, will be ordered by hue angle automatically.
+
+    Returns
+    -------
+    float
+        Area in a*b* units squared.
+    """
+    if len(colors) < 3:
+        return 0.0
+
+    # Sort by hue angle for proper polygon
+    sorted_colors = sorted(colors, key=lambda p: math.atan2(p[1], p[0]))
+
+    # Shoelace formula
+    n = len(sorted_colors)
+    area = 0.0
+    for i in range(n):
+        j = (i + 1) % n
+        area += sorted_colors[i][0] * sorted_colors[j][1]
+        area -= sorted_colors[j][0] * sorted_colors[i][1]
+    return abs(area) / 2.0
+
+
 def get_color_name(L: float, a: float, b: float) -> str:
     """Return the nearest standard color name for given L*a*b* values.
 

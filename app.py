@@ -1,6 +1,6 @@
 """
 E-paper Optical Analyzer - 메인 Streamlit 앱
-전자종이 디스플레이의 광학 특성을 분석하는 도구입니다.
+E-paper 디스플레이의 광학 특성을 분석하는 도구입니다.
 """
 
 import streamlit as st
@@ -27,9 +27,9 @@ def render_sidebar():
         st.divider()
         st.markdown(
             """
-            **전자종이 광학 분석 도구**
+            **E-paper 광학 분석 도구**
 
-            이 앱은 전자종이(E-paper) 디스플레이의
+            이 앱은 E-paper 디스플레이의
             광학 특성을 측정하고 분석하는 데 사용됩니다.
 
             ---
@@ -41,12 +41,12 @@ def render_sidebar():
             """
         )
         st.divider()
-        st.caption("© 2026 ETRI - E-paper 연구팀")
+        st.caption("© 2026 LGE ID선행개발 E-paper 연구팀")
 
 
 def render_home():
     """홈 페이지 렌더링."""
-    st.title("전자종이 광학 분석기")
+    st.title("E-paper Optical Analyzer")
     st.markdown("##### E-paper Optical Analyzer")
 
     st.divider()
@@ -55,7 +55,7 @@ def render_home():
     st.header("프로젝트 개요")
     st.markdown(
         """
-        **E-paper Optical Analyzer**는 전자종이 디스플레이의 광학 성능을
+        **E-paper Optical Analyzer**는 E-paper 디스플레이의 광학 성능을
         정량적으로 분석하기 위한 도구입니다.
 
         측정된 색상 데이터를 기준 색상과 비교하여 **색차(Delta E)**를 계산하고,
