@@ -12,7 +12,8 @@ import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
 
-from core.color_utils import lab_to_hex, calculate_gamut_area, calculate_gamut_volume
+from core.color_utils import lab_to_hex, calculate_gamut_area, calculate_gamut_volume, get_color_name
+from core.ui_common import render_mode_header
 
 # ---------------------------------------------------------------------------
 # 페이지 설정
@@ -28,9 +29,15 @@ st.set_page_config(
 # 고급 모드 체크
 # ---------------------------------------------------------------------------
 
-if st.session_state.get('app_mode') != 'advanced':
-    st.warning("이 페이지는 고급 모드에서만 사용할 수 있습니다. 홈에서 고급 모드를 선택해 주세요.")
+if st.session_state.get('app_mode') is None:
+    st.warning("먼저 홈에서 모드를 선택해 주세요.")
     st.stop()
+
+if st.session_state.get('app_mode') != 'advanced':
+    st.warning("이 페이지는 고급 모드에서만 사용할 수 있습니다.")
+    st.stop()
+
+render_mode_header()
 
 # ---------------------------------------------------------------------------
 # 공통 스타일
@@ -89,7 +96,15 @@ else:
     cumulative = st.session_state.get("cumulative_data")
     if isinstance(cumulative, pd.DataFrame):
         df = cumulative
-        data_frames = [("누적 데이터", df)]
+        # SOURCE_FILE 컬럼이 있으면 소스별로 분리
+        if "SOURCE_FILE" in cumulative.columns:
+            unique_sources = cumulative["SOURCE_FILE"].unique().tolist()
+            data_frames = [
+                (src, cumulative[cumulative["SOURCE_FILE"] == src].reset_index(drop=True))
+                for src in unique_sources
+            ]
+        else:
+            data_frames = [("누적 데이터", df)]
     elif isinstance(cumulative, list):
         df = pd.concat(cumulative, ignore_index=True)
         data_frames = [(f"데이터 {i + 1}", sub_df) for i, sub_df in enumerate(cumulative)]
@@ -277,7 +292,20 @@ st.divider()
 # =========================================================================
 
 st.header("2. L* 비교 차트")
-st.caption("각 샘플의 명도(L*) 값을 비교합니다.")
+st.caption("각 샘플의 명도(L*) 값을 색상별로 비교합니다.")
+
+# 색상별 HEX 매핑 (식별 색상 기준 바 색상)
+_COLOR_HEX_BAR = {
+    "White": "#E0E0E0", "Black": "#333333", "Red": "#D32F2F",
+    "Green": "#388E3C", "Blue": "#1976D2", "Yellow": "#FBC02D",
+    "Orange": "#F57C00", "Gray": "#9E9E9E",
+}
+
+# 각 샘플의 식별 색상 계산
+color_names = [
+    get_color_name(row["LAB_L"], row["LAB_A"], row["LAB_B"])
+    for _, row in df.iterrows()
+]
 
 fig_lstar = go.Figure()
 
@@ -292,15 +320,15 @@ if data_source == "누적 데이터" and len(data_frames) > 1:
     for src_idx, (src_name, sub_df) in enumerate(data_frames):
         if not all(c in sub_df.columns for c in _REQUIRED_COLS):
             continue
-        if "SAMPLE_NAME" in sub_df.columns:
-            sub_names = sub_df["SAMPLE_NAME"].astype(str).tolist()
-        else:
-            sub_names = [f"샘플 {i + 1}" for i in range(len(sub_df))]
+        sub_color_names = [
+            get_color_name(row["LAB_L"], row["LAB_A"], row["LAB_B"])
+            for _, row in sub_df.iterrows()
+        ]
 
         bar_color = _BAR_COLORS[src_idx % len(_BAR_COLORS)]
         fig_lstar.add_trace(
             go.Bar(
-                x=sub_names,
+                x=sub_color_names,
                 y=sub_df["LAB_L"],
                 marker_color=bar_color,
                 marker_line=dict(width=1.5, color="black"),
@@ -315,19 +343,18 @@ if data_source == "누적 데이터" and len(data_frames) > 1:
         )
     fig_lstar.update_layout(barmode="group")
 else:
-    bar_hex = [
-        lab_to_hex(row["LAB_L"], row["LAB_A"], row["LAB_B"])
-        for _, row in df.iterrows()
-    ]
+    bar_colors = [_COLOR_HEX_BAR.get(cn, "#9E9E9E") for cn in color_names]
+    text_colors = ["#FFFFFF" if row["LAB_L"] < 50 else "#000000" for _, row in df.iterrows()]
 
     fig_lstar.add_trace(
         go.Bar(
-            x=sample_names,
+            x=color_names,
             y=df["LAB_L"],
-            marker_color=bar_hex,
+            marker_color=bar_colors,
             marker_line=dict(width=1.5, color="black"),
             text=[f"{v:.1f}" for v in df["LAB_L"]],
-            textposition="outside",
+            textposition="inside",
+            textfont=dict(color=text_colors),
             name="측정 L*",
             hovertemplate=(
                 "<b>%{x}</b><br>"
@@ -338,8 +365,8 @@ else:
 
 fig_lstar.update_layout(
     **_common_layout(
-        title="L* 명도 비교",
-        xaxis_title="샘플",
+        title="색상별 L* 명도 비교",
+        xaxis_title="식별 색상",
         yaxis_title="L*",
         yaxis=dict(range=[0, 105]),
         height=500,
@@ -362,6 +389,16 @@ import math
 
 _ACHROMATIC_THRESHOLD = 10.0  # chroma < threshold → achromatic
 
+# 소스별 색상 팔레트 (gamut polygon 구분용)
+_GAMUT_PALETTE = [
+    {"fill": "rgba(100, 149, 237, 0.15)", "line": "rgba(65, 105, 225, 0.8)"},
+    {"fill": "rgba(255, 127, 80, 0.15)", "line": "rgba(255, 99, 71, 0.8)"},
+    {"fill": "rgba(60, 179, 113, 0.15)", "line": "rgba(46, 139, 87, 0.8)"},
+    {"fill": "rgba(186, 85, 211, 0.15)", "line": "rgba(148, 103, 189, 0.8)"},
+    {"fill": "rgba(255, 215, 0, 0.15)", "line": "rgba(218, 165, 32, 0.8)"},
+]
+_GAMUT_MARKER_SYMBOLS = ["circle", "square", "diamond", "triangle-up", "star"]
+
 
 def _is_chromatic(L: float, a: float, b: float) -> bool:
     """Return True if the color is chromatic (not near the neutral axis)."""
@@ -369,216 +406,294 @@ def _is_chromatic(L: float, a: float, b: float) -> bool:
     return chroma >= _ACHROMATIC_THRESHOLD
 
 
-chromatic_indices = [
-    i for i in range(len(df))
-    if _is_chromatic(df.iloc[i]["LAB_L"], df.iloc[i]["LAB_A"], df.iloc[i]["LAB_B"])
-]
-chromatic_names = [sample_names[i] for i in chromatic_indices]
+# ── 누적 데이터 소스별 Gamut 비교 모드 ──────────────────────────────────
+is_multi_source = data_source == "누적 데이터" and len(data_frames) > 1
 
-# 사용자가 gamut에 사용할 색상 선택
-if chromatic_names:
-    selected_gamut_colors = st.multiselect(
-        "Gamut 계산에 사용할 색상 선택",
-        options=chromatic_names,
-        default=chromatic_names,
-        help="White, Black 등 무채색은 자동 제외됩니다. 최소 3개 이상 선택해야 합니다.",
-    )
-else:
-    # fallback: let user pick from all
-    selected_gamut_colors = st.multiselect(
-        "Gamut 계산에 사용할 색상 선택",
-        options=sample_names,
-        default=sample_names,
-        help="최소 3개 이상 선택해야 합니다.",
-    )
+if is_multi_source:
+    # 누적 데이터: 소스별 개별 Gamut을 겹쳐서 비교
+    st.info("누적 데이터 소스별 Gamut을 비교합니다. 각 데이터의 색역이 서로 다른 색상/기호로 구분됩니다.")
 
-# 선택된 색상의 좌표 추출
-gamut_ab_points: list[tuple[float, float]] = []
-gamut_lab_points: list[tuple[float, float, float]] = []
-gamut_labels: list[str] = []
-gamut_hex: list[str] = []
+    # 소스별 gamut 데이터 수집
+    source_gamut_data = []
+    for src_idx, (src_name, sub_df) in enumerate(data_frames):
+        if not all(c in sub_df.columns for c in _REQUIRED_COLS):
+            continue
+        sub_ab = []
+        sub_lab = []
+        sub_labels = []
+        sub_hex = []
+        for _, row in sub_df.iterrows():
+            L_val = float(row["LAB_L"])
+            a_val = float(row["LAB_A"])
+            b_val = float(row["LAB_B"])
+            if not _is_chromatic(L_val, a_val, b_val):
+                continue
+            sname = str(row["SAMPLE_NAME"]) if "SAMPLE_NAME" in sub_df.columns else f"샘플"
+            sub_ab.append((a_val, b_val))
+            sub_lab.append((L_val, a_val, b_val))
+            sub_labels.append(sname)
+            sub_hex.append(lab_to_hex(L_val, a_val, b_val))
+        if len(sub_ab) >= 3:
+            area = calculate_gamut_area(sub_ab)
+            volume = calculate_gamut_volume(sub_lab)
+            source_gamut_data.append({
+                "name": src_name,
+                "ab": sub_ab, "lab": sub_lab,
+                "labels": sub_labels, "hex": sub_hex,
+                "area": area, "volume": volume,
+            })
 
-for i, name in enumerate(sample_names):
-    if name in selected_gamut_colors:
-        L_val = float(df.iloc[i]["LAB_L"])
-        a_val = float(df.iloc[i]["LAB_A"])
-        b_val = float(df.iloc[i]["LAB_B"])
-        gamut_ab_points.append((a_val, b_val))
-        gamut_lab_points.append((L_val, a_val, b_val))
-        gamut_labels.append(name)
-        gamut_hex.append(hex_colors[i])
+    if source_gamut_data:
+        # 메트릭: 소스별 면적/체적 비교
+        st.subheader("소스별 Gamut 비교")
+        metric_cols = st.columns(len(source_gamut_data))
+        for i, sgd in enumerate(source_gamut_data):
+            with metric_cols[i]:
+                palette = _GAMUT_PALETTE[i % len(_GAMUT_PALETTE)]
+                st.markdown(
+                    f"<div style='border-left: 4px solid {palette['line']}; padding-left: 12px;'>"
+                    f"<b>{sgd['name']}</b><br>"
+                    f"면적: {sgd['area']:,.1f}<br>"
+                    f"체적: {sgd['volume']:,.1f}</div>",
+                    unsafe_allow_html=True,
+                )
 
-if len(gamut_ab_points) >= 3:
-    # Calculate 2D gamut area
-    gamut_area = calculate_gamut_area(gamut_ab_points)
+        tab_2d, tab_3d = st.tabs(["2D Gamut 비교 (a*b*)", "3D Gamut 비교 (L*a*b*)"])
 
-    # Calculate 3D gamut volume
-    gamut_volume = calculate_gamut_volume(gamut_lab_points)
+        with tab_2d:
+            fig_gamut = go.Figure()
+            fig_gamut.add_hline(y=0, line_dash="dash", line_color="gray", line_width=0.8)
+            fig_gamut.add_vline(x=0, line_dash="dash", line_color="gray", line_width=0.8)
 
-    # Display metrics
-    col_m1, col_m2 = st.columns(2)
-    with col_m1:
-        st.metric("2D Gamut 면적 (a*b* 단위²)", f"{gamut_area:,.1f}")
-    with col_m2:
-        st.metric("3D Gamut 체적 (L*a*b* 단위³)", f"{gamut_volume:,.1f}")
+            for i, sgd in enumerate(source_gamut_data):
+                palette = _GAMUT_PALETTE[i % len(_GAMUT_PALETTE)]
+                symbol = _GAMUT_MARKER_SYMBOLS[i % len(_GAMUT_MARKER_SYMBOLS)]
 
-    # --- Tab layout for 2D and 3D views ---
-    tab_2d, tab_3d = st.tabs(["2D Gamut (a*b* 면적)", "3D Gamut (L*a*b* 체적)"])
+                # Sort by hue angle for polygon
+                pts = sgd["ab"]
+                sorted_idx = sorted(range(len(pts)), key=lambda j: math.atan2(pts[j][1], pts[j][0]))
+                sorted_ab = [pts[j] for j in sorted_idx]
+                sorted_labels = [sgd["labels"][j] for j in sorted_idx]
+                sorted_hex = [sgd["hex"][j] for j in sorted_idx]
 
-    # --- 2D a*b* Gamut polygon view ---
-    with tab_2d:
-        # Sort points by hue angle for polygon drawing
-        sorted_indices = sorted(
-            range(len(gamut_ab_points)),
-            key=lambda idx: math.atan2(gamut_ab_points[idx][1], gamut_ab_points[idx][0]),
-        )
-        sorted_ab = [gamut_ab_points[idx] for idx in sorted_indices]
-        sorted_labels = [gamut_labels[idx] for idx in sorted_indices]
-        sorted_hex = [gamut_hex[idx] for idx in sorted_indices]
+                poly_a = [p[0] for p in sorted_ab] + [sorted_ab[0][0]]
+                poly_b = [p[1] for p in sorted_ab] + [sorted_ab[0][1]]
 
-        # Close the polygon
-        poly_a = [p[0] for p in sorted_ab] + [sorted_ab[0][0]]
-        poly_b = [p[1] for p in sorted_ab] + [sorted_ab[0][1]]
+                # Gamut polygon
+                fig_gamut.add_trace(go.Scatter(
+                    x=poly_a, y=poly_b,
+                    mode="lines", fill="toself",
+                    fillcolor=palette["fill"],
+                    line=dict(color=palette["line"], width=2, dash="solid" if i == 0 else "dash"),
+                    name=f"{sgd['name']} (면적: {sgd['area']:,.1f})",
+                    hoverinfo="skip",
+                ))
 
-        fig_gamut = go.Figure()
+                # Points
+                fig_gamut.add_trace(go.Scatter(
+                    x=[p[0] for p in sorted_ab],
+                    y=[p[1] for p in sorted_ab],
+                    mode="markers+text",
+                    marker=dict(size=12, color=sorted_hex, line=dict(width=1.5, color="black"), symbol=symbol),
+                    text=sorted_labels,
+                    textposition="top right",
+                    textfont=dict(size=9),
+                    name=f"{sgd['name']} 포인트",
+                    hovertemplate=f"<b>%{{text}}</b> ({sgd['name']})<br>a* = %{{x:.2f}}<br>b* = %{{y:.2f}}<extra></extra>",
+                ))
 
-        # 기준선
-        fig_gamut.add_hline(y=0, line_dash="dash", line_color="gray", line_width=0.8)
-        fig_gamut.add_vline(x=0, line_dash="dash", line_color="gray", line_width=0.8)
+            all_a = [p[0] for sgd in source_gamut_data for p in sgd["ab"]]
+            all_b = [p[1] for sgd in source_gamut_data for p in sgd["ab"]]
+            ga_range = [min(all_a) - 15, max(all_a) + 15]
+            gb_range = [min(all_b) - 15, max(all_b) + 15]
 
-        # Filled gamut polygon
-        fig_gamut.add_trace(
-            go.Scatter(
-                x=poly_a,
-                y=poly_b,
-                mode="lines",
-                fill="toself",
-                fillcolor="rgba(100, 149, 237, 0.2)",
-                line=dict(color="rgba(65, 105, 225, 0.7)", width=2),
-                name="Gamut 영역",
-                hoverinfo="skip",
-            )
-        )
-
-        # Color points on the gamut
-        fig_gamut.add_trace(
-            go.Scatter(
-                x=[p[0] for p in sorted_ab],
-                y=[p[1] for p in sorted_ab],
-                mode="markers+text",
-                marker=dict(
-                    size=14,
-                    color=sorted_hex,
-                    line=dict(width=1.5, color="black"),
-                    symbol="circle",
-                ),
-                text=sorted_labels,
-                textposition="top right",
-                textfont=dict(size=10),
-                name="색상 포인트",
-                hovertemplate=(
-                    "<b>%{text}</b><br>"
-                    "a* = %{x:.2f}<br>"
-                    "b* = %{y:.2f}<extra></extra>"
-                ),
-            )
-        )
-
-        # Axis range
-        all_a = [p[0] for p in gamut_ab_points]
-        all_b = [p[1] for p in gamut_ab_points]
-        ga_range = [min(all_a) - 15, max(all_a) + 15]
-        gb_range = [min(all_b) - 15, max(all_b) + 15]
-
-        fig_gamut.update_layout(
-            **_common_layout(
-                title=f"2D Gamut (a*b* 면적: {gamut_area:,.1f})",
-                xaxis_title="a*",
-                yaxis_title="b*",
+            fig_gamut.update_layout(**_common_layout(
+                title="2D Gamut 비교 (소스별)",
+                xaxis_title="a*", yaxis_title="b*",
                 xaxis=dict(zeroline=False, range=ga_range),
                 yaxis=dict(zeroline=False, range=gb_range, scaleanchor="x"),
-                height=600,
-                showlegend=True,
+                height=600, showlegend=True,
                 legend=dict(x=0.01, y=0.99),
+            ))
+            st.plotly_chart(fig_gamut, use_container_width=True)
+
+        with tab_3d:
+            fig_3d = go.Figure()
+
+            _MESH_COLORS = ["cornflowerblue", "coral", "mediumseagreen", "mediumpurple", "gold"]
+            for i, sgd in enumerate(source_gamut_data):
+                symbol = _GAMUT_MARKER_SYMBOLS[i % len(_GAMUT_MARKER_SYMBOLS)]
+                L_vals = [p[0] for p in sgd["lab"]]
+                a_vals = [p[1] for p in sgd["lab"]]
+                b_vals = [p[2] for p in sgd["lab"]]
+
+                fig_3d.add_trace(go.Scatter3d(
+                    x=a_vals, y=b_vals, z=L_vals,
+                    mode="markers+text",
+                    marker=dict(size=7, color=sgd["hex"], line=dict(width=1.5, color="black"), symbol=symbol),
+                    text=sgd["labels"],
+                    textfont=dict(size=8),
+                    name=f"{sgd['name']} 포인트",
+                    hovertemplate=f"<b>%{{text}}</b> ({sgd['name']})<br>a*=%{{x:.2f}}<br>b*=%{{y:.2f}}<br>L*=%{{z:.2f}}<extra></extra>",
+                ))
+
+                if len(sgd["lab"]) >= 4:
+                    try:
+                        from scipy.spatial import ConvexHull
+                        pts = np.array(sgd["lab"])
+                        hull = ConvexHull(pts)
+                        fig_3d.add_trace(go.Mesh3d(
+                            x=pts[:, 1], y=pts[:, 2], z=pts[:, 0],
+                            i=[s[0] for s in hull.simplices],
+                            j=[s[1] for s in hull.simplices],
+                            k=[s[2] for s in hull.simplices],
+                            opacity=0.15,
+                            color=_MESH_COLORS[i % len(_MESH_COLORS)],
+                            name=f"{sgd['name']} 체적",
+                            hoverinfo="skip",
+                        ))
+                    except Exception:
+                        pass
+
+            fig_3d.update_layout(
+                **_common_layout(title="3D Gamut 비교 (소스별)", height=700, showlegend=True),
+                scene=dict(xaxis_title="a*", yaxis_title="b*", zaxis_title="L*"),
             )
-        )
+            st.plotly_chart(fig_3d, use_container_width=True)
+    else:
+        st.warning("누적 데이터에서 Gamut을 계산할 수 있는 유색(chromatic) 색상이 부족합니다.")
 
-        st.plotly_chart(fig_gamut, use_container_width=True)
-
-    # --- 3D L*a*b* Gamut view ---
-    with tab_3d:
-        fig_3d = go.Figure()
-
-        L_vals = [p[0] for p in gamut_lab_points]
-        a_vals = [p[1] for p in gamut_lab_points]
-        b_vals = [p[2] for p in gamut_lab_points]
-
-        # Scatter3d for gamut points
-        fig_3d.add_trace(
-            go.Scatter3d(
-                x=a_vals,
-                y=b_vals,
-                z=L_vals,
-                mode="markers+text",
-                marker=dict(
-                    size=8,
-                    color=gamut_hex,
-                    line=dict(width=1.5, color="black"),
-                ),
-                text=gamut_labels,
-                textposition="top right",
-                textfont=dict(size=9),
-                name="색상 포인트",
-                hovertemplate=(
-                    "<b>%{text}</b><br>"
-                    "a* = %{x:.2f}<br>"
-                    "b* = %{y:.2f}<br>"
-                    "L* = %{z:.2f}<extra></extra>"
-                ),
-            )
-        )
-
-        # Convex Hull mesh surface if enough points
-        if len(gamut_lab_points) >= 4:
-            try:
-                from scipy.spatial import ConvexHull
-                pts = np.array(gamut_lab_points)
-                hull = ConvexHull(pts)
-                # hull.simplices gives triangle faces
-                i_faces = [s[0] for s in hull.simplices]
-                j_faces = [s[1] for s in hull.simplices]
-                k_faces = [s[2] for s in hull.simplices]
-
-                fig_3d.add_trace(
-                    go.Mesh3d(
-                        x=pts[:, 1],  # a*
-                        y=pts[:, 2],  # b*
-                        z=pts[:, 0],  # L*
-                        i=i_faces,
-                        j=j_faces,
-                        k=k_faces,
-                        opacity=0.25,
-                        color="cornflowerblue",
-                        name="Gamut 체적",
-                        hoverinfo="skip",
-                    )
-                )
-            except Exception:
-                pass
-
-        fig_3d.update_layout(
-            **_common_layout(
-                title=f"3D Gamut (L*a*b* 체적: {gamut_volume:,.1f})",
-                height=700,
-                showlegend=True,
-            ),
-            scene=dict(
-                xaxis_title="a*",
-                yaxis_title="b*",
-                zaxis_title="L*",
-            ),
-        )
-
-        st.plotly_chart(fig_3d, use_container_width=True)
 else:
-    st.warning("Gamut 계산에는 최소 3개 이상의 색상이 필요합니다. 색상을 더 선택해 주세요.")
+    # 단일 데이터 소스: 기존 로직
+    chromatic_indices = [
+        i for i in range(len(df))
+        if _is_chromatic(df.iloc[i]["LAB_L"], df.iloc[i]["LAB_A"], df.iloc[i]["LAB_B"])
+    ]
+    chromatic_names = [sample_names[i] for i in chromatic_indices]
+
+    if chromatic_names:
+        selected_gamut_colors = st.multiselect(
+            "Gamut 계산에 사용할 색상 선택",
+            options=chromatic_names,
+            default=chromatic_names,
+            help="White, Black 등 무채색은 자동 제외됩니다. 최소 3개 이상 선택해야 합니다.",
+        )
+    else:
+        selected_gamut_colors = st.multiselect(
+            "Gamut 계산에 사용할 색상 선택",
+            options=sample_names,
+            default=sample_names,
+            help="최소 3개 이상 선택해야 합니다.",
+        )
+
+    gamut_ab_points: list[tuple[float, float]] = []
+    gamut_lab_points: list[tuple[float, float, float]] = []
+    gamut_labels: list[str] = []
+    gamut_hex: list[str] = []
+
+    for i, name in enumerate(sample_names):
+        if name in selected_gamut_colors:
+            L_val = float(df.iloc[i]["LAB_L"])
+            a_val = float(df.iloc[i]["LAB_A"])
+            b_val = float(df.iloc[i]["LAB_B"])
+            gamut_ab_points.append((a_val, b_val))
+            gamut_lab_points.append((L_val, a_val, b_val))
+            gamut_labels.append(name)
+            gamut_hex.append(hex_colors[i])
+
+    if len(gamut_ab_points) >= 3:
+        gamut_area = calculate_gamut_area(gamut_ab_points)
+        gamut_volume = calculate_gamut_volume(gamut_lab_points)
+
+        col_m1, col_m2 = st.columns(2)
+        with col_m1:
+            st.metric("2D Gamut 면적 (a*b* 단위²)", f"{gamut_area:,.1f}")
+        with col_m2:
+            st.metric("3D Gamut 체적 (L*a*b* 단위³)", f"{gamut_volume:,.1f}")
+
+        tab_2d, tab_3d = st.tabs(["2D Gamut (a*b* 면적)", "3D Gamut (L*a*b* 체적)"])
+
+        with tab_2d:
+            sorted_indices = sorted(
+                range(len(gamut_ab_points)),
+                key=lambda idx: math.atan2(gamut_ab_points[idx][1], gamut_ab_points[idx][0]),
+            )
+            sorted_ab = [gamut_ab_points[idx] for idx in sorted_indices]
+            sorted_labels = [gamut_labels[idx] for idx in sorted_indices]
+            sorted_hex = [gamut_hex[idx] for idx in sorted_indices]
+
+            poly_a = [p[0] for p in sorted_ab] + [sorted_ab[0][0]]
+            poly_b = [p[1] for p in sorted_ab] + [sorted_ab[0][1]]
+
+            fig_gamut = go.Figure()
+            fig_gamut.add_hline(y=0, line_dash="dash", line_color="gray", line_width=0.8)
+            fig_gamut.add_vline(x=0, line_dash="dash", line_color="gray", line_width=0.8)
+
+            fig_gamut.add_trace(go.Scatter(
+                x=poly_a, y=poly_b, mode="lines", fill="toself",
+                fillcolor="rgba(100, 149, 237, 0.2)",
+                line=dict(color="rgba(65, 105, 225, 0.7)", width=2),
+                name="Gamut 영역", hoverinfo="skip",
+            ))
+
+            fig_gamut.add_trace(go.Scatter(
+                x=[p[0] for p in sorted_ab], y=[p[1] for p in sorted_ab],
+                mode="markers+text",
+                marker=dict(size=14, color=sorted_hex, line=dict(width=1.5, color="black"), symbol="circle"),
+                text=sorted_labels, textposition="top right", textfont=dict(size=10),
+                name="색상 포인트",
+                hovertemplate="<b>%{text}</b><br>a* = %{x:.2f}<br>b* = %{y:.2f}<extra></extra>",
+            ))
+
+            all_a = [p[0] for p in gamut_ab_points]
+            all_b = [p[1] for p in gamut_ab_points]
+            ga_range = [min(all_a) - 15, max(all_a) + 15]
+            gb_range = [min(all_b) - 15, max(all_b) + 15]
+
+            fig_gamut.update_layout(**_common_layout(
+                title=f"2D Gamut (a*b* 면적: {gamut_area:,.1f})",
+                xaxis_title="a*", yaxis_title="b*",
+                xaxis=dict(zeroline=False, range=ga_range),
+                yaxis=dict(zeroline=False, range=gb_range, scaleanchor="x"),
+                height=600, showlegend=True, legend=dict(x=0.01, y=0.99),
+            ))
+            st.plotly_chart(fig_gamut, use_container_width=True)
+
+        with tab_3d:
+            fig_3d = go.Figure()
+            L_vals = [p[0] for p in gamut_lab_points]
+            a_vals = [p[1] for p in gamut_lab_points]
+            b_vals = [p[2] for p in gamut_lab_points]
+
+            fig_3d.add_trace(go.Scatter3d(
+                x=a_vals, y=b_vals, z=L_vals,
+                mode="markers+text",
+                marker=dict(size=8, color=gamut_hex, line=dict(width=1.5, color="black")),
+                text=gamut_labels, textposition="top right", textfont=dict(size=9),
+                name="색상 포인트",
+                hovertemplate="<b>%{text}</b><br>a*=%{x:.2f}<br>b*=%{y:.2f}<br>L*=%{z:.2f}<extra></extra>",
+            ))
+
+            if len(gamut_lab_points) >= 4:
+                try:
+                    from scipy.spatial import ConvexHull
+                    pts = np.array(gamut_lab_points)
+                    hull = ConvexHull(pts)
+                    fig_3d.add_trace(go.Mesh3d(
+                        x=pts[:, 1], y=pts[:, 2], z=pts[:, 0],
+                        i=[s[0] for s in hull.simplices],
+                        j=[s[1] for s in hull.simplices],
+                        k=[s[2] for s in hull.simplices],
+                        opacity=0.25, color="cornflowerblue",
+                        name="Gamut 체적", hoverinfo="skip",
+                    ))
+                except Exception:
+                    pass
+
+            fig_3d.update_layout(
+                **_common_layout(title=f"3D Gamut (L*a*b* 체적: {gamut_volume:,.1f})", height=700, showlegend=True),
+                scene=dict(xaxis_title="a*", yaxis_title="b*", zaxis_title="L*"),
+            )
+            st.plotly_chart(fig_3d, use_container_width=True)
+    else:
+        st.warning("Gamut 계산에는 최소 3개 이상의 색상이 필요합니다. 색상을 더 선택해 주세요.")

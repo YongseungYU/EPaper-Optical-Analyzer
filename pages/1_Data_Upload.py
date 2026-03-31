@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from core.parser import parse_cgats_file, parse_cgats_string
 from core.color_utils import lab_to_hex
 from core.export import export_to_excel
+from core.ui_common import render_mode_header
 
 # ---------------------------------------------------------------------------
 # 페이지 설정
@@ -33,6 +34,7 @@ if app_mode is None:
     st.warning("먼저 홈에서 기본/고급 모드를 선택해 주세요.")
     st.stop()
 
+render_mode_header()
 st.title("📄 데이터 업로드")
 st.markdown("I1Pro3 측정 데이터(CGATS txt)를 업로드하거나 붙여넣어 L\\*a\\*b\\* 값을 추출합니다.")
 
@@ -310,6 +312,21 @@ if app_mode == 'basic':
             st.markdown(html_table, unsafe_allow_html=True)
         else:
             st.info("L*a*b* 컬럼을 찾을 수 없어 색상 미리보기를 표시할 수 없습니다.")
+
+        # --- 엑셀 다운로드 (기본 모드) ---
+        st.divider()
+        st.subheader("데이터 내보내기")
+        try:
+            excel_bytes = export_to_excel(df)
+            st.download_button(
+                label="📥 Excel 파일 다운로드",
+                data=excel_bytes,
+                file_name="epaper_measurement_data.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+        except Exception as e:
+            st.error(f"Excel 파일 생성 실패: {e}")
 
     else:
         st.info("위에서 데이터를 붙여넣고 파싱 버튼을 클릭하세요.")

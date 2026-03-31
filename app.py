@@ -54,20 +54,9 @@ def render_home():
 
     current_mode = st.session_state.get("app_mode")
 
-    # --- Mode already selected: show current mode and change button ---
+    # --- Mode already selected: redirect to first page ---
     if current_mode is not None:
-        mode_label = "기본 모드" if current_mode == "basic" else "고급 모드"
-        st.success(f"현재 **{mode_label}**가 선택되어 있습니다. 사이드바에서 원하는 페이지로 이동하세요.")
-
-        if current_mode == "basic":
-            st.info("기본 모드: 데이터 붙여넣기 → Delta E 계산 (CIEDE2000)")
-        else:
-            st.info("고급 모드: 데이터 관리 + 색상 분석 + Delta E + 그래프/Gamut + 피드백")
-
-        st.divider()
-        if st.button("🔄 모드 변경", use_container_width=True):
-            st.session_state["app_mode"] = None
-            st.rerun()
+        st.switch_page("pages/1_Data_Upload.py")
         return
 
     # --- Mode selection ---
@@ -107,7 +96,7 @@ def render_home():
         st.markdown("")
         if st.button("기본 모드 선택", key="btn_basic", use_container_width=True, type="primary"):
             st.session_state["app_mode"] = "basic"
-            st.rerun()
+            st.switch_page("pages/1_Data_Upload.py")
 
     with col2:
         st.markdown(
@@ -139,7 +128,7 @@ def render_home():
         st.markdown("")
         if st.button("고급 모드 선택", key="btn_advanced", use_container_width=True, type="primary"):
             st.session_state["app_mode"] = "advanced"
-            st.rerun()
+            st.switch_page("pages/1_Data_Upload.py")
 
 
 def main():

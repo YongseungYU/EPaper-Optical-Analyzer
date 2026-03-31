@@ -1,7 +1,16 @@
 """피드백 페이지 - 앱 내에서 직접 피드백을 제출하면 GitHub Issue로 자동 등록됩니다."""
 
+import sys
+from pathlib import Path
+
 import streamlit as st
 import requests
+
+_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
+from core.ui_common import render_mode_header
 
 st.set_page_config(page_title="피드백", page_icon="💬", layout="wide")
 
@@ -9,9 +18,15 @@ st.set_page_config(page_title="피드백", page_icon="💬", layout="wide")
 # 고급 모드 체크
 # ---------------------------------------------------------------------------
 
-if st.session_state.get('app_mode') != 'advanced':
-    st.warning("이 페이지는 고급 모드에서만 사용할 수 있습니다. 홈에서 고급 모드를 선택해 주세요.")
+if st.session_state.get('app_mode') is None:
+    st.warning("먼저 홈에서 모드를 선택해 주세요.")
     st.stop()
+
+if st.session_state.get('app_mode') != 'advanced':
+    st.warning("이 페이지는 고급 모드에서만 사용할 수 있습니다.")
+    st.stop()
+
+render_mode_header()
 
 # ---------------------------------------------------------------------------
 # 비밀번호 보호

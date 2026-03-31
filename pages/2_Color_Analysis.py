@@ -13,6 +13,7 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 from core.color_utils import lab_to_hex, get_color_name
+from core.ui_common import render_mode_header
 
 # ── 페이지 설정 ─────────────────────────────────────────────────────────────
 
@@ -20,10 +21,15 @@ st.set_page_config(page_title="색상 분석", page_icon="🎨", layout="wide")
 
 # ── 고급 모드 체크 ──────────────────────────────────────────────────────────
 
-if st.session_state.get('app_mode') != 'advanced':
-    st.warning("이 페이지는 고급 모드에서만 사용할 수 있습니다. 홈에서 고급 모드를 선택해 주세요.")
+if st.session_state.get('app_mode') is None:
+    st.warning("먼저 홈에서 모드를 선택해 주세요.")
     st.stop()
 
+if st.session_state.get('app_mode') != 'advanced':
+    st.warning("이 페이지는 고급 모드에서만 사용할 수 있습니다.")
+    st.stop()
+
+render_mode_header()
 st.title("🎨 색상 분석")
 st.markdown("측정된 L\\*a\\*b\\* 데이터를 기반으로 색상을 시각화하고 분석합니다.")
 
@@ -264,33 +270,38 @@ st.plotly_chart(fig_ab, use_container_width=True)
 
 st.header("📊 L* 명도 분포")
 
+# 색상별 HEX 매핑 (식별 색상 기준 바 색상)
+_COLOR_HEX_MAP = {
+    "White": "#E0E0E0", "Black": "#333333", "Red": "#D32F2F",
+    "Green": "#388E3C", "Blue": "#1976D2", "Yellow": "#FBC02D",
+    "Orange": "#F57C00", "Gray": "#9E9E9E",
+}
+
 fig_L = go.Figure()
 
 if is_cumulative and has_source_col:
-    # Grouped bar chart: X = color names, groups = data source
+    # Grouped bar chart: X = 식별 색상, groups = data source
     import plotly.express as px
 
-    # Build DataFrame for grouped chart
     chart_rows = []
     for cd in color_data:
         chart_rows.append({
-            "색상명": cd["name"],
+            "식별 색상": cd["nearest"],
+            "샘플명": cd["name"],
             "L*": cd["L"],
             "데이터": cd["source_label"] or "기타",
             "hex": cd["hex"],
         })
     chart_df = pd.DataFrame(chart_rows)
 
-    # Get unique source labels for color assignment
     unique_sources = chart_df["데이터"].unique().tolist()
-    # Use a qualitative color palette
     source_colors = px.colors.qualitative.Set2[:len(unique_sources)]
     color_map = dict(zip(unique_sources, source_colors))
 
     for src_label in unique_sources:
         src_data = chart_df[chart_df["데이터"] == src_label]
         fig_L.add_trace(go.Bar(
-            x=src_data["색상명"],
+            x=src_data["식별 색상"],
             y=src_data["L*"],
             name=src_label,
             marker=dict(
@@ -300,32 +311,41 @@ if is_cumulative and has_source_col:
             text=[f"{v:.1f}" for v in src_data["L*"]],
             textposition="inside",
             textfont=dict(size=12),
-            hovertemplate="<b>%{x}</b><br>L* = %{y:.2f}<br>" + src_label + "<extra></extra>",
+            hovertemplate="<b>%{x}</b> (%{text})<br>L* = %{y:.2f}<br>" + src_label + "<extra></extra>",
         ))
 
     fig_L.update_layout(barmode="group")
 else:
-    names = [cd["name"] for cd in color_data]
-    L_values = [cd["L"] for cd in color_data]
-    bar_colors = [cd["hex"] for cd in color_data]
+    # 식별 색상별로 그룹화하여 바 색상을 실제 색상으로 표현
+    chart_rows = []
+    for cd in color_data:
+        chart_rows.append({
+            "식별 색상": cd["nearest"],
+            "샘플명": cd["name"],
+            "L*": cd["L"],
+            "hex": _COLOR_HEX_MAP.get(cd["nearest"], cd["hex"]),
+        })
+    chart_df = pd.DataFrame(chart_rows)
+
+    bar_colors = chart_df["hex"].tolist()
     text_colors = ["#FFFFFF" if cd["L"] < 50 else "#000000" for cd in color_data]
 
     fig_L.add_trace(go.Bar(
-        x=names,
-        y=L_values,
+        x=chart_df["식별 색상"],
+        y=chart_df["L*"],
         marker=dict(
             color=bar_colors,
             line=dict(width=1, color="#333333"),
         ),
-        text=[f"{v:.1f}" for v in L_values],
+        text=[f"{v:.1f}" for v in chart_df["L*"]],
         textposition="inside",
         textfont=dict(color=text_colors, size=14),
         hovertemplate="<b>%{x}</b><br>L* = %{y:.2f}<extra></extra>",
     ))
 
 fig_L.update_layout(
-    title="샘플별 L* (명도) 값",
-    xaxis_title="샘플",
+    title="색상별 L* (명도) 값",
+    xaxis_title="식별 색상",
     yaxis_title="L* (0=검정, 100=흰색)",
     yaxis=dict(range=[0, 105]),
     height=450,

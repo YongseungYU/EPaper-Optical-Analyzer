@@ -15,6 +15,7 @@ if _PROJECT_ROOT not in sys.path:
 from core.delta_e import delta_e_ciede2000
 from core.color_utils import lab_to_hex, get_color_name
 from core.export import export_to_excel
+from core.ui_common import render_mode_header
 
 # ── 페이지 설정 ─────────────────────────────────────────────────────────────
 
@@ -30,6 +31,7 @@ if app_mode is None:
 is_basic = app_mode == 'basic'
 is_advanced = app_mode == 'advanced'
 
+render_mode_header()
 st.title("📐 Delta E 계산기")
 st.markdown("측정값과 기준값 사이의 색차(Delta E)를 계산합니다.")
 
@@ -116,6 +118,43 @@ st.header("📌 기준값(Reference) 설정")
 
 reference: dict[str, tuple[float, float, float]] = {}
 
+# 세션에 저장된 파싱 결과 불러오기
+if "parsed_reference" not in st.session_state:
+    st.session_state["parsed_reference"] = {}
+
+
+def _parse_ref_text(text: str) -> tuple[dict, list]:
+    """기준값 텍스트를 파싱하여 (reference dict, errors list)를 반환합니다."""
+    parsed = {}
+    errors = []
+    for line_num, line in enumerate(text.strip().splitlines(), 1):
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split()
+        if len(parts) < 4:
+            errors.append(f"Line {line_num}: 형식 오류 (최소 4개 필드 필요) - '{line}'")
+            continue
+        try:
+            name = " ".join(parts[:-3])
+            rL = float(parts[-3])
+            ra = float(parts[-2])
+            rb = float(parts[-1])
+            parsed[name] = (rL, ra, rb)
+        except ValueError:
+            errors.append(f"Line {line_num}: 숫자 변환 오류 - '{line}'")
+    return parsed, errors
+
+
+def _show_ref_table(ref: dict):
+    """파싱된 기준값을 테이블로 표시합니다."""
+    ref_display = []
+    for cname, (rL, ra, rb) in ref.items():
+        hex_c = lab_to_hex(rL, ra, rb)
+        ref_display.append({"색상명": cname, "L*": rL, "a*": ra, "b*": rb, "미리보기": hex_c})
+    st.dataframe(pd.DataFrame(ref_display), use_container_width=True, hide_index=True)
+
+
 if is_basic:
     # Basic mode: text paste only
     st.markdown("기준 L\\*a\\*b\\* 값을 아래 형식으로 붙여넣으세요 (공백 또는 탭 구분):")
@@ -128,42 +167,23 @@ if is_basic:
         key="ref_text_input",
     )
 
-    if ref_text.strip():
-        parse_errors = []
-        for line_num, line in enumerate(ref_text.strip().splitlines(), 1):
-            line = line.strip()
-            if not line:
-                continue
-            parts = line.split()
-            if len(parts) < 4:
-                parse_errors.append(f"Line {line_num}: 형식 오류 (최소 4개 필드 필요) - '{line}'")
-                continue
-            try:
-                name = " ".join(parts[:-3])
-                rL = float(parts[-3])
-                ra = float(parts[-2])
-                rb = float(parts[-1])
-                reference[name] = (rL, ra, rb)
-            except ValueError:
-                parse_errors.append(f"Line {line_num}: 숫자 변환 오류 - '{line}'")
-
-        if parse_errors:
-            for err in parse_errors:
+    if st.button("📋 기준값 파싱", type="primary", use_container_width=True, key="btn_parse_ref_basic"):
+        if ref_text.strip():
+            parsed, errors = _parse_ref_text(ref_text)
+            for err in errors:
                 st.warning(err)
+            if parsed:
+                st.session_state["parsed_reference"] = parsed
+                st.success(f"✅ {len(parsed)}개 기준값을 파싱했습니다.")
+            else:
+                st.warning("파싱된 기준값이 없습니다. 형식을 확인해 주세요.")
+        else:
+            st.warning("기준값 텍스트를 입력해 주세요.")
 
-        if reference:
-            st.success(f"✅ {len(reference)}개 기준값을 파싱했습니다.")
-            ref_display = []
-            for cname, (rL, ra, rb) in reference.items():
-                hex_c = lab_to_hex(rL, ra, rb)
-                ref_display.append({
-                    "색상명": cname,
-                    "L*": rL,
-                    "a*": ra,
-                    "b*": rb,
-                    "미리보기": hex_c,
-                })
-            st.dataframe(pd.DataFrame(ref_display), use_container_width=True, hide_index=True)
+    # 파싱 결과 표시
+    if st.session_state["parsed_reference"]:
+        reference = st.session_state["parsed_reference"]
+        _show_ref_table(reference)
 
 elif is_advanced:
     # Advanced mode: text paste + 직접 입력
@@ -184,42 +204,23 @@ elif is_advanced:
             key="ref_text_input",
         )
 
-        if ref_text.strip():
-            parse_errors = []
-            for line_num, line in enumerate(ref_text.strip().splitlines(), 1):
-                line = line.strip()
-                if not line:
-                    continue
-                parts = line.split()
-                if len(parts) < 4:
-                    parse_errors.append(f"Line {line_num}: 형식 오류 (최소 4개 필드 필요) - '{line}'")
-                    continue
-                try:
-                    name = " ".join(parts[:-3])
-                    rL = float(parts[-3])
-                    ra = float(parts[-2])
-                    rb = float(parts[-1])
-                    reference[name] = (rL, ra, rb)
-                except ValueError:
-                    parse_errors.append(f"Line {line_num}: 숫자 변환 오류 - '{line}'")
-
-            if parse_errors:
-                for err in parse_errors:
+        if st.button("📋 기준값 파싱", type="primary", use_container_width=True, key="btn_parse_ref_adv"):
+            if ref_text.strip():
+                parsed, errors = _parse_ref_text(ref_text)
+                for err in errors:
                     st.warning(err)
+                if parsed:
+                    st.session_state["parsed_reference"] = parsed
+                    st.success(f"✅ {len(parsed)}개 기준값을 파싱했습니다.")
+                else:
+                    st.warning("파싱된 기준값이 없습니다. 형식을 확인해 주세요.")
+            else:
+                st.warning("기준값 텍스트를 입력해 주세요.")
 
-            if reference:
-                st.success(f"✅ {len(reference)}개 기준값을 파싱했습니다.")
-                ref_display = []
-                for cname, (rL, ra, rb) in reference.items():
-                    hex_c = lab_to_hex(rL, ra, rb)
-                    ref_display.append({
-                        "색상명": cname,
-                        "L*": rL,
-                        "a*": ra,
-                        "b*": rb,
-                        "미리보기": hex_c,
-                    })
-                st.dataframe(pd.DataFrame(ref_display), use_container_width=True, hide_index=True)
+        # 파싱 결과 표시
+        if st.session_state["parsed_reference"]:
+            reference = st.session_state["parsed_reference"]
+            _show_ref_table(reference)
 
     elif ref_method == "직접 입력":
         st.markdown("각 샘플에 대한 기준 L\\*a\\*b\\* 값을 입력하세요.")
@@ -393,19 +394,63 @@ if calc_button and reference:
         # Store in session state
         st.session_state["delta_e_results"] = results_df
 
-        # Display styled table with pass/fail colors
-        def highlight_pass_fail(row):
-            n_cols = len(row)
-            styles = [""] * n_cols
-            judgment_idx = row.index.get_loc("판정")
-            if row["판정"] == "합격":
-                styles[judgment_idx] = "background-color: #d4edda; color: #155724; font-weight: bold"
-            else:
-                styles[judgment_idx] = "background-color: #f8d7da; color: #721c24; font-weight: bold"
-            return styles
+        # ── 색상별 그룹화된 결과 표시 ─────────────────────────────────
+        # 색상명 → HEX 매핑 (식별 색상 컬러 패치용)
+        _COLOR_HEX_MAP = {
+            "White": "#F5F5F5", "Black": "#222222", "Red": "#D32F2F",
+            "Green": "#388E3C", "Blue": "#1976D2", "Yellow": "#FBC02D",
+            "Orange": "#F57C00", "Gray": "#9E9E9E",
+        }
 
-        styled_df = results_df.style.apply(highlight_pass_fail, axis=1)
-        st.dataframe(styled_df, use_container_width=True, hide_index=True)
+        unique_colors = results_df["식별 색상"].unique().tolist()
+
+        for color_name in unique_colors:
+            color_group = results_df[results_df["식별 색상"] == color_name]
+            color_hex = _COLOR_HEX_MAP.get(color_name, "#9E9E9E")
+            text_color = "#FFFFFF" if color_name in ("Black", "Blue", "Red", "Green") else "#000000"
+
+            # 색상 그룹 헤더 (컬러 패치 + 색상명 + 판정 요약)
+            group_pass = (color_group["판정"] == "합격").sum()
+            group_total = len(color_group)
+            group_status = "합격" if group_pass == group_total else f"{group_pass}/{group_total} 합격"
+
+            st.markdown(
+                f"""<div style="
+                    display: flex; align-items: center; gap: 12px;
+                    margin-top: 16px; margin-bottom: 8px;
+                ">
+                    <span style="
+                        display: inline-block; width: 32px; height: 32px;
+                        background-color: {color_hex}; border-radius: 6px;
+                        border: 2px solid #ccc;
+                    "></span>
+                    <span style="font-size: 18px; font-weight: bold;">{color_name}</span>
+                    <span style="
+                        font-size: 14px; padding: 2px 10px; border-radius: 12px;
+                        background-color: {'#d4edda' if group_pass == group_total else '#f8d7da'};
+                        color: {'#155724' if group_pass == group_total else '#721c24'};
+                        font-weight: 600;
+                    ">{group_status}</span>
+                </div>""",
+                unsafe_allow_html=True,
+            )
+
+            # 해당 색상의 결과 테이블
+            display_cols = [c for c in color_group.columns if c != "식별 색상"]
+            group_display = color_group[display_cols].copy()
+
+            def highlight_pass_fail(row):
+                n_cols = len(row)
+                styles = [""] * n_cols
+                judgment_idx = row.index.get_loc("판정")
+                if row["판정"] == "합격":
+                    styles[judgment_idx] = "background-color: #d4edda; color: #155724; font-weight: bold"
+                else:
+                    styles[judgment_idx] = "background-color: #f8d7da; color: #721c24; font-weight: bold"
+                return styles
+
+            styled_group = group_display.style.apply(highlight_pass_fail, axis=1)
+            st.dataframe(styled_group, use_container_width=True, hide_index=True)
 
         # ── 요약 통계 ────────────────────────────────────────────────────
 
