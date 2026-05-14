@@ -265,26 +265,84 @@ def handle_paste_parse(pasted_text: str):
 
 if app_mode == 'basic':
     # =======================================================================
-    # 기본 모드: 텍스트 붙여넣기만, 누적 기능 없음
+    # 기본 모드: 텍스트 붙여넣기 + 파일 업로드, 누적 기능 없음
     # =======================================================================
-    st.info("기본 모드: 텍스트 붙여넣기로 데이터를 입력하세요.")
+    st.info("기본 모드: 텍스트 붙여넣기 또는 파일 업로드로 데이터를 입력하세요.")
 
-    st.subheader("텍스트 붙여넣기")
-    st.markdown(
-        "CGATS txt 파일을 **메모장**으로 열어 "
-        "**전체 선택(Ctrl+A) → 복사(Ctrl+C)** 후 아래에 붙여넣기하세요.\n\n"
-        "여러 파일의 데이터를 한 번에 붙여넣을 수 있습니다 (CGATS 헤더가 여러 개이면 자동 분리)."
-    )
+    tab_paste_b, tab_upload_b = st.tabs([
+        "📋 텍스트 붙여넣기 (권장)",
+        "📁 파일 업로드 (보안 차단 시 사용 불가)",
+    ])
 
-    pasted_text = st.text_area(
-        "CGATS 데이터 붙여넣기",
-        height=300,
-        placeholder="여기에 CGATS 데이터를 붙여넣으세요...\n\nCGATS.17\nORIGINATOR \"i1Profiler\"\n...\n\n여러 CGATS 블록을 한 번에 붙여넣을 수 있습니다.",
-        key="cgats_paste_input",
-    )
+    # --- 기본 모드 탭 1: 텍스트 붙여넣기 ---
+    with tab_paste_b:
+        st.subheader("텍스트 붙여넣기")
+        st.markdown(
+            "CGATS txt 파일을 **메모장**으로 열어 "
+            "**전체 선택(Ctrl+A) → 복사(Ctrl+C)** 후 아래에 붙여넣기하세요.\n\n"
+            "여러 파일의 데이터를 한 번에 붙여넣을 수 있습니다 (CGATS 헤더가 여러 개이면 자동 분리)."
+        )
 
-    if st.button("📋 붙여넣기 데이터 파싱", type="primary", use_container_width=True):
-        handle_paste_parse(pasted_text)
+        pasted_text = st.text_area(
+            "CGATS 데이터 붙여넣기",
+            height=300,
+            placeholder="여기에 CGATS 데이터를 붙여넣으세요...\n\nCGATS.17\nORIGINATOR \"i1Profiler\"\n...\n\n여러 CGATS 블록을 한 번에 붙여넣을 수 있습니다.",
+            key="cgats_paste_input",
+        )
+
+        if st.button("📋 붙여넣기 데이터 파싱", type="primary", use_container_width=True):
+            handle_paste_parse(pasted_text)
+
+    # --- 기본 모드 탭 2: 파일 업로드 ---
+    with tab_upload_b:
+        st.subheader("파일 업로드")
+        st.caption(
+            "사내 보안 정책으로 파일 업로드가 차단될 수 있습니다. "
+            "그 경우 '텍스트 붙여넣기' 탭을 이용하세요."
+        )
+        basic_uploaded_files = st.file_uploader(
+            "CGATS txt 파일을 선택하거나 여기에 드래그하세요",
+            type=["txt"],
+            accept_multiple_files=True,
+            help="I1Pro3에서 내보낸 CGATS 형식 txt 파일을 업로드합니다.",
+            key="basic_uploader",
+        )
+
+        if st.button(
+            "📁 업로드 파일 파싱",
+            type="primary",
+            use_container_width=True,
+            disabled=not basic_uploaded_files,
+            key="btn_basic_upload_parse",
+        ):
+            all_dfs = []
+            all_meta = {}
+            file_names = []
+            parse_errors = []
+            for uf in basic_uploaded_files:
+                try:
+                    udf, umeta = parse_cgats_file(uf)
+                    udf['SOURCE_FILE'] = uf.name
+                    all_dfs.append(udf)
+                    all_meta[uf.name] = umeta
+                    file_names.append(uf.name)
+                except Exception as e:
+                    parse_errors.append((uf.name, str(e)))
+
+            for fname, err in parse_errors:
+                st.warning(f"**{fname}** 파싱 실패: {err}")
+
+            if all_dfs:
+                combined = pd.concat(all_dfs, ignore_index=True)
+                st.session_state['measurement_data'] = combined
+                st.session_state['file_metadata'] = all_meta
+                st.session_state['uploaded_file_names'] = file_names
+                st.success(
+                    f"파싱 성공! {len(all_dfs)}개 파일, {len(combined)}개 샘플"
+                )
+                st.rerun()
+            elif not parse_errors:
+                st.warning("업로드한 파일에서 데이터를 추출하지 못했습니다.")
 
     st.divider()
 
