@@ -13,7 +13,7 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 from core.delta_e import delta_e_ciede2000
-from core.color_utils import lab_to_hex, get_color_name
+from core.color_utils import lab_to_hex, get_color_name, _STANDARD_COLORS
 from core.export import export_to_excel
 from core.ui_common import render_mode_header
 
@@ -115,12 +115,27 @@ default_limit = st.sidebar.number_input(
 # ── 기준값 설정 ─────────────────────────────────────────────────────────────
 
 st.header("📌 기준값(Reference) 설정")
+st.markdown(
+    "측정 데이터의 L\\*a\\*b\\* 값을 기준으로 색상을 자동 식별한 뒤, "
+    "색상별 기준값을 입력합니다."
+)
 
 reference: dict[str, tuple[float, float, float]] = {}
 
-# 세션에 저장된 파싱 결과 불러오기
-if "parsed_reference" not in st.session_state:
-    st.session_state["parsed_reference"] = {}
+# 측정 데이터에서 색상 자동 식별
+detected_color_set: set[str] = set()
+for _, row in df.iterrows():
+    detected_color_set.add(
+        get_color_name(float(row["LAB_L"]), float(row["LAB_A"]), float(row["LAB_B"]))
+    )
+detected_colors = sorted(detected_color_set)
+
+if not detected_colors:
+    st.warning("측정 데이터에서 색상을 식별하지 못했습니다.")
+    st.stop()
+
+st.markdown("측정 데이터에서 자동 식별된 색상 목록입니다.")
+st.info(", ".join(detected_colors))
 
 
 def _parse_ref_text(text: str) -> tuple[dict, list]:
@@ -146,19 +161,80 @@ def _parse_ref_text(text: str) -> tuple[dict, list]:
     return parsed, errors
 
 
-def _show_ref_table(ref: dict):
-    """파싱된 기준값을 테이블로 표시합니다."""
-    ref_display = []
-    for cname, (rL, ra, rb) in ref.items():
-        hex_c = lab_to_hex(rL, ra, rb)
-        ref_display.append({"색상명": cname, "L*": rL, "a*": ra, "b*": rb, "미리보기": hex_c})
-    st.dataframe(pd.DataFrame(ref_display), use_container_width=True, hide_index=True)
+def _build_initial_ref_df(colors: list[str]) -> pd.DataFrame:
+    """식별된 색상 목록에 대한 기본 기준값 DataFrame을 생성합니다."""
+    rows = []
+    for c in colors:
+        L_def, a_def, b_def = _STANDARD_COLORS.get(c, (50.0, 0.0, 0.0))
+        rows.append({"색상명": c, "기준 L*": L_def, "기준 a*": a_def, "기준 b*": b_def})
+    return pd.DataFrame(rows)
 
 
-if is_basic:
-    # Basic mode: text paste only
+# 식별된 색상이 바뀌면 편집 테이블 초기화
+_detected_sig = tuple(detected_colors)
+if st.session_state.get("ref_editor_sig") != _detected_sig:
+    st.session_state["ref_editor_sig"] = _detected_sig
+    st.session_state["ref_editor_df"] = _build_initial_ref_df(detected_colors)
+
+if is_advanced:
+    input_method = st.radio(
+        "기준값 입력 방식",
+        options=["색상별 표 입력 (권장)", "텍스트 붙여넣기"],
+        horizontal=True,
+        key="ref_input_method",
+    )
+else:
+    input_method = "색상별 표 입력 (권장)"
+
+if input_method == "색상별 표 입력 (권장)":
+    edited_df = st.data_editor(
+        st.session_state["ref_editor_df"],
+        use_container_width=True,
+        hide_index=True,
+        num_rows="fixed",
+        disabled=["색상명"],
+        column_config={
+            "색상명": st.column_config.TextColumn("색상명"),
+            "기준 L*": st.column_config.NumberColumn(
+                "기준 L*", format="%.2f", min_value=0.0, max_value=100.0, step=0.1,
+            ),
+            "기준 a*": st.column_config.NumberColumn(
+                "기준 a*", format="%.2f", min_value=-128.0, max_value=128.0, step=0.1,
+            ),
+            "기준 b*": st.column_config.NumberColumn(
+                "기준 b*", format="%.2f", min_value=-128.0, max_value=128.0, step=0.1,
+            ),
+        },
+        key="ref_color_editor",
+    )
+    # 편집 결과 세션에 보존
+    st.session_state["ref_editor_df"] = edited_df
+
+    # 편집된 표를 reference dict로 변환 (색상명을 키로 사용)
+    for _, row in edited_df.iterrows():
+        try:
+            reference[str(row["색상명"])] = (
+                float(row["기준 L*"]),
+                float(row["기준 a*"]),
+                float(row["기준 b*"]),
+            )
+        except (TypeError, ValueError):
+            continue
+
+    if reference:
+        st.success(f"✅ {len(reference)}개 색상 기준값이 설정되었습니다.")
+
+else:
+    # 텍스트 붙여넣기 (고급 모드 전용)
+    if "parsed_reference" not in st.session_state:
+        st.session_state["parsed_reference"] = {}
+
     st.markdown("기준 L\\*a\\*b\\* 값을 아래 형식으로 붙여넣으세요 (공백 또는 탭 구분):")
-    st.code("White 66.5 -4 0\nBlack 12 7 -11\nRed 26.5 41 30\nYellow 62 -11 65\nBlue 27 6 -35\nGreen 32 -22 5", language="text")
+    st.code(
+        "White 66.5 -4 0\nBlack 12 7 -11\nRed 26.5 41 30\n"
+        "Yellow 62 -11 65\nBlue 27 6 -35\nGreen 32 -22 5",
+        language="text",
+    )
 
     ref_text = st.text_area(
         "기준값 텍스트 입력",
@@ -167,7 +243,7 @@ if is_basic:
         key="ref_text_input",
     )
 
-    if st.button("📋 기준값 파싱", type="primary", use_container_width=True, key="btn_parse_ref_basic"):
+    if st.button("📋 기준값 파싱", type="primary", use_container_width=True, key="btn_parse_ref"):
         if ref_text.strip():
             parsed, errors = _parse_ref_text(ref_text)
             for err in errors:
@@ -180,155 +256,17 @@ if is_basic:
         else:
             st.warning("기준값 텍스트를 입력해 주세요.")
 
-    # 파싱 결과 표시
     if st.session_state["parsed_reference"]:
         reference = st.session_state["parsed_reference"]
-        _show_ref_table(reference)
-
-elif is_advanced:
-    # Advanced mode: text paste + 직접 입력
-    ref_method = st.radio(
-        "기준값 입력 방식",
-        options=["텍스트 붙여넣기 (기준값)", "직접 입력"],
-        horizontal=True,
-    )
-
-    if ref_method == "텍스트 붙여넣기 (기준값)":
-        st.markdown("기준 L\\*a\\*b\\* 값을 아래 형식으로 붙여넣으세요 (공백 또는 탭 구분):")
-        st.code("White 66.5 -4 0\nBlack 12 7 -11\nRed 26.5 41 30\nYellow 62 -11 65\nBlue 27 6 -35\nGreen 32 -22 5", language="text")
-
-        ref_text = st.text_area(
-            "기준값 텍스트 입력",
-            height=200,
-            placeholder="White 66.5 -4 0\nBlack 12 7 -11\n...",
-            key="ref_text_input",
-        )
-
-        if st.button("📋 기준값 파싱", type="primary", use_container_width=True, key="btn_parse_ref_adv"):
-            if ref_text.strip():
-                parsed, errors = _parse_ref_text(ref_text)
-                for err in errors:
-                    st.warning(err)
-                if parsed:
-                    st.session_state["parsed_reference"] = parsed
-                    st.success(f"✅ {len(parsed)}개 기준값을 파싱했습니다.")
-                else:
-                    st.warning("파싱된 기준값이 없습니다. 형식을 확인해 주세요.")
-            else:
-                st.warning("기준값 텍스트를 입력해 주세요.")
-
-        # 파싱 결과 표시
-        if st.session_state["parsed_reference"]:
-            reference = st.session_state["parsed_reference"]
-            _show_ref_table(reference)
-
-    elif ref_method == "직접 입력":
-        st.markdown("각 샘플에 대한 기준 L\\*a\\*b\\* 값을 입력하세요.")
-
-        # Get sample names from measurement data
-        if name_col:
-            sample_names = df[name_col].unique().tolist()
-        else:
-            sample_names = [f"Sample {i + 1}" for i in range(len(df))]
-
-        # Build color groups: map each sample to its detected color name
-        sample_color_map = {}
-        for idx, row in df.iterrows():
-            sname = str(row[name_col]) if name_col else f"Sample {idx + 1}"
-            L, a, b = float(row["LAB_L"]), float(row["LAB_A"]), float(row["LAB_B"])
-            detected = get_color_name(L, a, b)
-            sample_color_map[sname] = detected
-
-        # Get unique color groups
-        unique_colors = sorted(set(sample_color_map.values()))
-
-        # ── 전체 적용 / 분할 적용 ───────────────────────────────────────────
-        st.subheader("일괄 입력 도구")
-
-        apply_col1, apply_col2 = st.columns(2)
-
-        with apply_col1:
-            st.markdown("**전체 적용** — 모든 샘플에 동일한 기준값 적용")
-            ac1, ac2, ac3 = st.columns(3)
-            with ac1:
-                bulk_L = st.number_input("L*", min_value=0.0, max_value=100.0, value=50.0, step=0.1, key="bulk_L")
-            with ac2:
-                bulk_a = st.number_input("a*", min_value=-128.0, max_value=128.0, value=0.0, step=0.1, key="bulk_a")
-            with ac3:
-                bulk_b = st.number_input("b*", min_value=-128.0, max_value=128.0, value=0.0, step=0.1, key="bulk_b")
-            if st.button("전체 적용", key="apply_all"):
-                for sn in sample_names:
-                    st.session_state[f"ref_L_{sn}"] = bulk_L
-                    st.session_state[f"ref_a_{sn}"] = bulk_a
-                    st.session_state[f"ref_b_{sn}"] = bulk_b
-                st.rerun()
-
-        with apply_col2:
-            st.markdown("**분할 적용** — 선택한 색상 그룹에 기준값 적용")
-            group_colors = st.multiselect(
-                "대상 색상 선택",
-                unique_colors,
-                key="group_color_select",
-                help="선택한 색상으로 식별된 모든 샘플에 동일한 기준값을 적용합니다.",
+        ref_display = []
+        for cname, (rL, ra, rb) in reference.items():
+            hex_c = lab_to_hex(rL, ra, rb)
+            ref_display.append(
+                {"색상명": cname, "L*": rL, "a*": ra, "b*": rb, "미리보기": hex_c}
             )
-            gc1, gc2, gc3 = st.columns(3)
-            with gc1:
-                group_L = st.number_input("L*", min_value=0.0, max_value=100.0, value=50.0, step=0.1, key="group_L")
-            with gc2:
-                group_a = st.number_input("a*", min_value=-128.0, max_value=128.0, value=0.0, step=0.1, key="group_a")
-            with gc3:
-                group_b = st.number_input("b*", min_value=-128.0, max_value=128.0, value=0.0, step=0.1, key="group_b")
-            if st.button("분할 적용", key="apply_group"):
-                # Apply to all samples whose detected color is in the selected group
-                for sn in sample_names:
-                    detected = sample_color_map.get(sn)
-                    if detected in group_colors:
-                        st.session_state[f"ref_L_{sn}"] = group_L
-                        st.session_state[f"ref_a_{sn}"] = group_a
-                        st.session_state[f"ref_b_{sn}"] = group_b
-                st.rerun()
+        st.dataframe(pd.DataFrame(ref_display), use_container_width=True, hide_index=True)
 
-        # ── 테이블 형태 입력 ────────────────────────────────────────────────
-        st.subheader("개별 샘플 기준값")
-
-        # Header row
-        hc1, hc2, hc3, hc4, hc5 = st.columns([2, 1, 1, 1, 1])
-        with hc1:
-            st.markdown("**샘플명**")
-        with hc2:
-            st.markdown("**식별 색상**")
-        with hc3:
-            st.markdown("**L\\***")
-        with hc4:
-            st.markdown("**a\\***")
-        with hc5:
-            st.markdown("**b\\***")
-
-        for sname in sample_names:
-            detected = sample_color_map.get(sname, "")
-            c0, c_color, c1, c2, c3 = st.columns([2, 1, 1, 1, 1])
-            with c0:
-                st.markdown(f"`{sname}`")
-            with c_color:
-                st.markdown(f"{detected}")
-            with c1:
-                ref_L = st.number_input(
-                    "L*", min_value=0.0, max_value=100.0, value=50.0,
-                    step=0.1, key=f"ref_L_{sname}", label_visibility="collapsed",
-                )
-            with c2:
-                ref_a = st.number_input(
-                    "a*", min_value=-128.0, max_value=128.0, value=0.0,
-                    step=0.1, key=f"ref_a_{sname}", label_visibility="collapsed",
-                )
-            with c3:
-                ref_b = st.number_input(
-                    "b*", min_value=-128.0, max_value=128.0, value=0.0,
-                    step=0.1, key=f"ref_b_{sname}", label_visibility="collapsed",
-                )
-            reference[str(sname)] = (ref_L, ref_a, ref_b)
-
-# Store reference in session state for use by Color Analysis page
+# Color Analysis 페이지에서 사용할 수 있도록 세션에 저장
 if reference:
     st.session_state["reference_colors"] = reference
 
@@ -352,12 +290,19 @@ if calc_button and reference:
         ma = float(row["LAB_A"])
         mb = float(row["LAB_B"])
 
-        # Find matching reference
-        ref_lab = reference.get(sample_name)
+        # 측정값으로부터 색상 식별
+        detected_color = get_color_name(mL, ma, mb)
+
+        # 기준값 매칭: 식별된 색상명 우선 → 샘플명 → 부분 일치 순
+        ref_lab = reference.get(detected_color)
         if ref_lab is None:
-            # Try partial match
+            ref_lab = reference.get(sample_name)
+        if ref_lab is None:
             for ref_name in reference:
-                if ref_name.lower() in sample_name.lower() or sample_name.lower() in ref_name.lower():
+                if (
+                    ref_name.lower() in sample_name.lower()
+                    or sample_name.lower() in ref_name.lower()
+                ):
                     ref_lab = reference[ref_name]
                     break
 
@@ -367,8 +312,6 @@ if calc_button and reference:
         rL, ra, rb = ref_lab
         de_value = calc_fn(mL, ma, mb, rL, ra, rb)
 
-        # Determine color for per-color limit
-        detected_color = get_color_name(mL, ma, mb)
         limit = color_limits.get(detected_color, default_limit)
         pass_fail = "합격" if de_value <= limit else "불합격"
 
